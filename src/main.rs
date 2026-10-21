@@ -638,9 +638,7 @@ fn record(
     let target = if pattern {
         Target::Pattern
     } else if let Some(id) = device {
-        glide::capture::camera::enable_screen_capture_devices();
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        let found = glide::capture::camera::ios_devices();
+        let found = glide::capture::camera::ios_devices_wait(std::time::Duration::from_secs(5));
         let d = found
             .iter()
             .find(|d| d.id == id || d.name.to_lowercase().contains(&id.to_lowercase()))
@@ -724,11 +722,10 @@ fn devices() -> Result<()> {
     for m in camera::microphones() {
         println!("  {}  ({})", m.name, m.id);
     }
-    // iOS devices appear shortly after screen-capture devices are enabled.
-    camera::enable_screen_capture_devices();
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // Enabling the screen-capture device class publishes iOS devices a moment
+    // later, so give them that moment before listing.
     println!("iPhone / iPad:");
-    for d in camera::ios_devices() {
+    for d in camera::ios_devices_wait(std::time::Duration::from_secs(5)) {
         println!("  {}  ({})", d.name, d.id);
     }
     Ok(())

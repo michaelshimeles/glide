@@ -27,10 +27,11 @@ if [ -z "$IDENTITY" ]; then
   # shows as on in System Settings yet Glide keeps asking). Requiring only
   # the identifier keeps grants across rebuilds.
   echo "note: no signing identity found; ad-hoc signing with a stable requirement" >&2
-  codesign --force --sign - --identifier com.heyfabrika.glide \
+  codesign --force --sign - --identifier com.heyfabrika.glide --entitlements support/entitlements.plist \
     -r='designated => identifier "com.heyfabrika.glide"' "$STAGE"
 else
-  codesign --force --sign "$IDENTITY" --identifier com.heyfabrika.glide "$STAGE"
+  codesign --force --sign "$IDENTITY" --identifier com.heyfabrika.glide \
+    --entitlements support/entitlements.plist "$STAGE"
 fi
 codesign --verify --strict "$STAGE"
 rm -rf "$APP.old"

@@ -341,15 +341,29 @@ impl LivePreview {
             session.addInput(&input);
             let out = AVCaptureVideoDataOutput::new();
             // Small frames: the output scales (keeping the aspect ratio).
+            // USB iPhone screens advertise a zero-sized active format until
+            // capture starts, so leave their size unconstrained and accept
+            // the native first frame instead of requesting an invalid 2×2.
             let dims = dev.activeFormat().formatDescription();
             let d = objc2_core_media::CMVideoFormatDescriptionGetDimensions(&dims);
-            let scale = (max_px as f64 / d.width.max(d.height).max(1) as f64).min(1.0);
-            let even = |v: i32| ((v as f64 * scale) as i64 / 2 * 2).max(2);
-            out.setVideoSettings(Some(&crate::util::dict(vec![
-                (crate::util::cf_ns(kCVPixelBufferPixelFormatTypeKey), crate::util::num_i(crate::util::PIX_BGRA as i64)),
-                (crate::util::cf_ns(kCVPixelBufferWidthKey), crate::util::num_i(even(d.width))),
-                (crate::util::cf_ns(kCVPixelBufferHeightKey), crate::util::num_i(even(d.height))),
-            ])));
+            if d.width > 0 && d.height > 0 {
+                let scale = if max_px > 0 {
+                    (max_px as f64 / d.width.max(d.height) as f64).min(1.0)
+                } else {
+                    1.0
+                };
+                let even = |v: i32| ((v as f64 * scale) as i64 / 2 * 2).max(2);
+                out.setVideoSettings(Some(&crate::util::dict(vec![
+                    (crate::util::cf_ns(kCVPixelBufferPixelFormatTypeKey), crate::util::num_i(crate::util::PIX_BGRA as i64)),
+                    (crate::util::cf_ns(kCVPixelBufferWidthKey), crate::util::num_i(even(d.width))),
+                    (crate::util::cf_ns(kCVPixelBufferHeightKey), crate::util::num_i(even(d.height))),
+                ])));
+            } else {
+                out.setVideoSettings(Some(&crate::util::dict(vec![(
+                    crate::util::cf_ns(kCVPixelBufferPixelFormatTypeKey),
+                    crate::util::num_i(crate::util::PIX_BGRA as i64),
+                )])));
+            }
             out.setAlwaysDiscardsLateVideoFrames(true);
             let latest = Arc::new(Mutex::new(None));
             let target = Arc::new(AtomicU64::new(0));

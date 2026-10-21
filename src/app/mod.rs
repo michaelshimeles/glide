@@ -254,6 +254,10 @@ struct Recording {
 
 type Finished = Result<PathBuf, String>;
 
+/// A capture handed back by `begin_capture`, tagged with the `start_gen` it
+/// belongs to so a stale one can be thrown away.
+type Started = (u64, Result<Recorder, String>);
+
 /// Scripted run for `GLIDE_GUI_SELFTEST=1` (scripts/selftest.sh): record a
 /// test pattern, stop, open it in the editor, export, check and quit. Never
 /// touches the mouse or needs permissions.
@@ -320,6 +324,12 @@ struct App {
     /// When playback's next preview frame is due (redraws are paced to it).
     next_frame_at: Option<Instant>,
     finished: Arc<Mutex<Option<Finished>>>,
+    /// A capture started off the UI thread.
+    started: Arc<Mutex<Option<Started>>>,
+    /// Bumped whenever an in-flight start stops being wanted.
+    start_gen: u64,
+    /// A start is in flight for the current `start_gen`.
+    starting: bool,
     error: Option<String>,
     menubar: Option<menubar::MenuBar>,
     last_tick: Instant,
@@ -379,6 +389,9 @@ impl App {
             stale_textures: vec![],
             next_frame_at: None,
             finished: Arc::new(Mutex::new(None)),
+            started: Arc::new(Mutex::new(None)),
+            start_gen: 0,
+            starting: false,
             error: None,
             menubar: None,
             last_tick: Instant::now(),
@@ -636,27 +649,67 @@ impl App {
         }
     }
 
+    /// Start the capture on a worker thread. An iPhone answers with its screen
+    /// size only once it is handing over frames, which takes seconds, and the
+    /// UI thread cannot wait that long. `collect_capture` picks it up.
     fn begin_capture(&mut self) {
+        if self.starting {
+            return;
+        }
+        self.start_gen += 1;
+        self.starting = true;
+        let generation = self.start_gen;
         let opts = self.recorder_options();
-        match Recorder::start(opts) {
-            Ok(r) => {
-                if let Some(rec) = &mut self.recording {
+        let slot = self.started.clone();
+        std::thread::spawn(move || {
+            let res = objc2::rc::autoreleasepool(|_| Recorder::start(opts)).map_err(|e| format!("{e:#}"));
+            *slot.lock().unwrap() = Some((generation, res));
+            wake();
+        });
+    }
+
+    /// Take delivery of a capture `begin_capture` started.
+    fn collect_capture(&mut self) {
+        let Some((generation, res)) = self.started.lock().unwrap().take() else { return };
+        let stale = generation != self.start_gen;
+        if !stale {
+            self.starting = false;
+        }
+        match res {
+            Ok(r) => match self.recording.as_mut().filter(|_| !stale) {
+                Some(rec) => {
                     rec.rec = Some(r);
                     rec.countdown_until = None;
                 }
-            }
-            Err(e) => {
+                // Stopped, cancelled or restarted while it was still starting:
+                // let it go instead of leaving a half-written package behind.
+                None => {
+                    std::thread::spawn(move || objc2::rc::autoreleasepool(|_| r.cancel()));
+                }
+            },
+            Err(e) if !stale => {
                 self.recording = None;
-                self.error = Some(format!("Couldn't start recording: {e:#}"));
+                self.error = Some(format!("Couldn't start recording: {e}"));
                 self.close_bar();
                 self.permission_note = permission_note();
                 push(Cmd::ShowWindow);
             }
+            Err(_) => {}
+        }
+    }
+
+    /// Drop any capture still starting, so its recorder is thrown away when it
+    /// arrives instead of being adopted by the next recording.
+    fn abandon_start(&mut self) {
+        if self.starting {
+            self.start_gen += 1;
+            self.starting = false;
         }
     }
 
     fn stop_recording(&mut self) {
         let Some(rec) = self.recording.take() else { return };
+        self.abandon_start();
         self.close_bar();
         let Some(r) = rec.rec else {
             push(Cmd::ShowWindow);
@@ -679,6 +732,7 @@ impl App {
     /// window hidden and finishes the cancel before a new one starts.
     fn cancel_recording(&mut self, restarting: bool) {
         let Some(rec) = self.recording.take() else { return };
+        self.abandon_start();
         if let Some(r) = rec.rec {
             if restarting {
                 objc2::rc::autoreleasepool(|_| r.cancel());
@@ -790,8 +844,10 @@ impl App {
             self.handle(el, c);
         }
         self.update_live();
+        self.collect_capture();
         if let Some(rec) = &self.recording
             && rec.rec.is_none()
+            && !self.starting
             && rec.countdown_until.is_some_and(|t| Instant::now() >= t)
         {
             self.begin_capture();
@@ -1220,7 +1276,16 @@ impl App {
             return;
         }
         let was = home::CAPTURING_SHORTCUT.swap(false, Ordering::Relaxed);
-        let note = self.permission_note.clone();
+        // A cabled iPhone uses AVFoundation and does not need macOS Screen
+        // Recording access, so do not show the unrelated permission banner.
+        let note = if self.settings.source == SourceKind::Device {
+            None
+        } else {
+            // Permission can be granted in System Settings while Glide is
+            // still open. Read the current TCC state instead of leaving the
+            // startup warning cached until the next launch.
+            permission_note()
+        };
         let action = match &mut self.view {
             View::Start => {
                 let live = self.live_view(ui.ctx(), renderer);
