@@ -841,7 +841,10 @@ impl Editor {
                 if crate::hw::light() && px.0 > 1920 {
                     px = (1920, (px.1 as f32 * 1920.0 / px.0 as f32) as u32);
                 }
-                if let Some(id) = self.preview.render(egui_renderer, self.playhead, px) {
+                // While playing, the next redraw's frame decodes ahead.
+                let wraps = self.looping && self.voice.is_none();
+                let next = self.playing.map(|_| next_redraw(self.playhead, super::frame_period().as_secs_f64() * 1000.0, self.duration(), wraps));
+                if let Some(id) = self.preview.render(egui_renderer, self.playhead, next, px) {
                     let shadow = egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(60) };
                     ui.painter().add(shadow.as_shape(rect, CornerRadius::same(4)));
                     ui.painter().image(id, rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
@@ -1095,5 +1098,31 @@ fn res_label(h: u32) -> String {
         2160 => "4K".into(),
         1440 => "1440p (2K)".into(),
         _ => format!("{h}p"),
+    }
+}
+
+/// When playback's next redraw, `period_ms` after `playhead`, lands: past
+/// the end that's the start if playback wraps there (as `tick` does), else
+/// the end.
+fn next_redraw(playhead: f64, period_ms: f64, duration: f64, wraps: bool) -> f64 {
+    let next = playhead + period_ms;
+    if next < duration {
+        next
+    } else if wraps {
+        0.0
+    } else {
+        duration
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_redraw;
+
+    #[test]
+    fn the_next_redraw_wraps_like_looping_playback() {
+        assert_eq!(next_redraw(1000.0, 16.0, 5000.0, true), 1016.0);
+        assert_eq!(next_redraw(4990.0, 16.0, 5000.0, true), 0.0);
+        assert_eq!(next_redraw(4990.0, 16.0, 5000.0, false), 5000.0);
     }
 }

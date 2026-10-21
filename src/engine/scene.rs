@@ -228,6 +228,11 @@ impl Scene {
         (playback_ms * self.fps / 1000.0).round() as i64
     }
 
+    /// The source time frame `f` shows (its `Frame::source_ms`).
+    pub fn source_ms(&self, f: i64) -> f64 {
+        self.map.to_source(f as f64 * 1000.0 / self.fps)
+    }
+
     fn screen_values(&mut self, f: i64) -> Vec<f64> {
         let (map, sizes, tl, events) = (&self.map, &self.sizes, &self.project.timeline, &self.events);
         let spring = self.project.style.screen_spring;
@@ -289,7 +294,7 @@ impl Scene {
     pub fn frame(&mut self, playback_ms: f64, height: f64) -> Frame {
         let f = self.frame_index(playback_ms);
         let pb = f as f64 * 1000.0 / self.fps;
-        let src = self.map.to_source(pb);
+        let src = self.source_ms(f);
         let k = height / self.sizes.output.y;
         let size = self.sizes.output * k;
         let style = self.project.style.clone();

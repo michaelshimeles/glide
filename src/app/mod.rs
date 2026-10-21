@@ -18,6 +18,7 @@ pub mod timeline;
 pub mod updater;
 pub mod voiceover;
 pub mod recbar;
+mod scrub;
 pub mod widgets;
 pub mod winpick;
 
@@ -66,10 +67,17 @@ static QUEUE: Mutex<Vec<Cmd>> = Mutex::new(Vec::new());
 static PROXY: OnceLock<Mutex<EventLoopProxy<()>>> = OnceLock::new();
 static DRAG: AtomicBool = AtomicBool::new(false);
 
-fn wake() {
+/// Wake the event loop: it runs `tick` and redraws every window.
+pub(crate) fn wake() {
     if let Some(p) = PROXY.get() {
         let _ = p.lock().unwrap().send_event(());
     }
+}
+
+/// Time between preview redraws while playing: one preview frame, 30 fps
+/// in light mode.
+pub(crate) fn frame_period() -> Duration {
+    Duration::from_millis(if crate::hw::light() { 33 } else { 16 })
 }
 
 pub fn push(c: Cmd) {
@@ -2035,7 +2043,7 @@ impl ApplicationHandler for App {
         if animating && shown && let Some(w) = &self.main {
             // One redraw per preview frame (30 fps in light mode). Every
             // redraw wakes this loop again, so redraw only once it's due.
-            let period = Duration::from_millis(if crate::hw::light() { 33 } else { 16 });
+            let period = frame_period();
             let due = self.next_frame_at.unwrap_or(now);
             if due <= now {
                 w.window.request_redraw();

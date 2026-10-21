@@ -163,6 +163,16 @@ pub fn render(shot: &Shot, out_file: &Path) -> Result<()> {
                 ed.tick();
             }
         }
+        // The preview's video frames decode on worker threads, which have no
+        // event loop to wake here: wait before the pass that draws them, and
+        // once more for the camera, which the pass after the screen frame
+        // arrives asks for at that frame's time.
+        if (4..=5).contains(&i)
+            && let Some(ed) = &editor
+            && !ed.preview.settle(std::time::Duration::from_secs(30))
+        {
+            eprintln!("glide: snapshot: the preview's video frames didn't arrive in 30 s");
+        }
         let out = ctx.run_ui(input, |ui| {
             match &mut editor {
                 Some(ed) => {
@@ -237,8 +247,9 @@ pub fn render(shot: &Shot, out_file: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Time the editor preview path (decode + zero-copy upload + render) over
-/// consecutive frames, as playback does. Returns frames per second.
+/// Time the editor preview's UI-thread work (zero-copy upload + render) over
+/// consecutive frames, as playback does; decoding runs on the preview's
+/// workers. Returns frames per second.
 pub fn bench_preview(project: &Path, size: (u32, u32), frames: u32) -> Result<f64> {
     let gpu = Gpu::headless()?;
     let mut renderer = egui_wgpu::Renderer::new(&gpu.device, wgpu::TextureFormat::Rgba8Unorm, egui_wgpu::RendererOptions::default());
@@ -246,10 +257,12 @@ pub fn bench_preview(project: &Path, size: (u32, u32), frames: u32) -> Result<f6
     let preview = &mut ed.preview;
     let step = 1000.0 / 60.0;
     // Warm up (first decode, pipeline creation).
-    preview.render(&mut renderer, 0.0, size);
+    preview.render(&mut renderer, 0.0, None, size);
+    preview.settle(std::time::Duration::from_secs(10));
+    preview.render(&mut renderer, 0.0, None, size);
     let t = std::time::Instant::now();
     for i in 1..=frames {
-        preview.render(&mut renderer, i as f64 * step, size);
+        preview.render(&mut renderer, i as f64 * step, None, size);
     }
     gpu.device.poll(wgpu::PollType::wait_indefinitely()).ok();
     Ok(frames as f64 / t.elapsed().as_secs_f64())

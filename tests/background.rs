@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use glide::app::editor::Editor;
 use glide::export::{self, Job, Source};
@@ -30,7 +31,10 @@ fn editor(name: &str) -> (PathBuf, Editor) {
 }
 
 fn draw(ed: &mut Editor, size: (u32, u32)) -> Image {
-    ed.preview.draw(0.0, size);
+    // The first draw asks for the video frame; draw again once it's decoded.
+    ed.preview.draw(0.0, None, size);
+    assert!(ed.preview.settle(Duration::from_secs(10)), "no video frame");
+    ed.preview.draw(0.0, None, size);
     let (width, height, rgba) = ed.preview.read_pixels().expect("preview pixels");
     Image { width, height, rgba }
 }

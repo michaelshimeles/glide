@@ -10,6 +10,7 @@
 //! once.
 
 use std::ffi::c_void;
+use std::ops::Range;
 use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::Mutex;
@@ -211,6 +212,17 @@ impl Index {
         self.by_pts[n.saturating_sub(1)]
     }
 
+    /// The source times `target` resolves to sample `i`: from half a frame
+    /// before its pts to half a frame before the next one's. Empty for a
+    /// sample that shares its pts with a later one.
+    fn span(&self, i: usize) -> Range<f64> {
+        let run = self.by_pts.partition_point(|&j| self.pts[j] < self.pts[i])..self.by_pts.partition_point(|&j| self.pts[j] <= self.pts[i]);
+        let p = run.start + self.by_pts[run].iter().position(|&j| j == i).expect("sample in the index");
+        let from = if p == 0 { f64::NEG_INFINITY } else { self.pts[i] - self.half };
+        let to = self.by_pts.get(p + 1).map_or(f64::INFINITY, |&j| self.pts[j] - self.half);
+        from..to
+    }
+
     /// Whether sample `j` is a leading picture: after its full-sync sample
     /// in decode order but before it on screen. With open GOPs (HEVC with
     /// frame reordering) these may reference the GOP before, so they can't
@@ -329,6 +341,11 @@ impl VtDecoder {
     /// a frame, as `FrameSource::frame_at` picks it.
     pub fn target(&self, source_ms: f64) -> usize {
         self.index.target(source_ms)
+    }
+
+    /// The source times `target` resolves to sample `i`.
+    pub fn span(&self, i: usize) -> Range<f64> {
+        self.index.span(i)
     }
 
     /// Decode sample `i` (an id from `target`). Frames before it are decoded
@@ -805,6 +822,14 @@ mod tests {
         let leading = (0..n).filter(|&j| dec.index.leading(j)).count();
         eprintln!("synth: full-sync samples {:?}, {leading} leading pictures", keys(&dec));
         check_walk(&f.path, false);
+        // Each sample's span is where `target` picks it, in display order.
+        for p in 0..n {
+            let i = dec.index.by_pts[p];
+            let span = dec.span(i);
+            let inside = [span.start.max(-1000.0), span.end.min(1e9) - 0.01];
+            assert!(inside.iter().all(|&t| dec.target(t) == i), "span of sample {i}: {span:?}");
+            assert!(p == 0 || dec.target(span.start - 0.01) == dec.index.by_pts[p - 1], "span of sample {i} starts late");
+        }
         // Every frame from a fresh start, leading pictures included.
         for p in 0..n {
             objc2::rc::autoreleasepool(|_| {
