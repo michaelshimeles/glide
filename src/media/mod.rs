@@ -1,5 +1,7 @@
-//! Reading recorded media with AVAssetReader (hardware decode).
+//! Reading recorded media with AVAssetReader (hardware decode), and exact
+//! frames by sample with VideoToolbox (`vt`).
 
+pub mod vt;
 pub mod writer;
 
 use std::path::Path;
