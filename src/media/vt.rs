@@ -184,7 +184,10 @@ struct Index {
 }
 
 impl Index {
-    fn build(track: &AVAssetTrack) -> Result<Index> {
+    /// Read the sample table, asking `keep_going` every `ASK_EVERY`
+    /// samples; false stops it with an error.
+    fn build(track: &AVAssetTrack, keep_going: &impl Fn() -> bool) -> Result<Index> {
+        const ASK_EVERY: usize = 4096;
         if !unsafe { track.canProvideSampleCursors() } {
             bail!("the video track can't provide sample cursors");
         }
@@ -194,6 +197,7 @@ impl Index {
         let cursor = unsafe { track.makeSampleCursorAtFirstSampleInDecodeOrder() }.context("empty video track")?;
         let (mut pts, mut key) = (vec![], vec![]);
         loop {
+            ensure!(key.len() % ASK_EVERY != 0 || keep_going(), "stopped while reading the sample table");
             let full = unsafe { cursor.currentSampleSyncInfo() }.sampleIsFullSync.as_bool();
             // Decoding starts at the first sample, whatever its flags say.
             key.push(if full || key.is_empty() { key.len() } else { key[key.len() - 1] });
@@ -305,15 +309,16 @@ impl Drop for VtDecoder {
 }
 
 impl VtDecoder {
-    /// Read the first video track's sample table. Fails if the track can't
-    /// provide sample cursors.
-    pub fn open(path: &Path) -> Result<Self> {
+    /// Read the first video track's sample table (about 20 ms for an hour of
+    /// 60 fps video). Fails if the track can't provide sample cursors, or if
+    /// `keep_going` returns false while the table is read.
+    pub fn open(path: &Path, keep_going: impl Fn() -> bool) -> Result<Self> {
         let asset = open_asset(path)?;
         let track = tracks(&asset, unsafe { AVMediaTypeVideo.unwrap() })
             .into_iter()
             .next()
             .ok_or_else(|| anyhow!("no video track in {}", path.display()))?;
-        let index = Index::build(&track)?;
+        let index = Index::build(&track, &keep_going)?;
         // No timebase: sample data loads synchronously.
         let generator = unsafe { AVSampleBufferGenerator::initWithAsset_timebase(AVSampleBufferGenerator::alloc(), &asset, None) };
         let cursor = unsafe { track.makeSampleCursorAtFirstSampleInDecodeOrder() }.context("empty video track")?;
@@ -753,7 +758,7 @@ mod tests {
     /// after the last one in the same GOP costs only the samples between,
     /// any other target the samples from its full-sync sample.
     fn check_walk(path: &Path, count: bool) -> Moves {
-        let mut dec = VtDecoder::open(path).unwrap();
+        let mut dec = VtDecoder::open(path, || true).unwrap();
         let mut src = FrameSource::open(path).unwrap();
         if count {
             assert_eq!(dec.index.by_pts, (0..dec.index.pts.len()).collect::<Vec<_>>(), "no reordering");
@@ -793,7 +798,7 @@ mod tests {
     fn h264_capture_matches_frame_source() {
         let f = fixture("h264");
         capture(&f.path, Codec::H264, 30, 150);
-        let dec = VtDecoder::open(&f.path).unwrap();
+        let dec = VtDecoder::open(&f.path, || true).unwrap();
         assert_eq!(keys(&dec), [0, 60, 120], "a full-sync sample every 2 s");
         let moves = check_walk(&f.path, true);
         assert!(moves.forward_in_gop > 0 && moves.backward_in_gop > 0 && moves.across_gops > 0, "{moves:?}");
@@ -803,7 +808,7 @@ mod tests {
     fn hevc_capture_matches_frame_source() {
         let f = fixture("hevc");
         capture(&f.path, Codec::Hevc, 60, 180);
-        let keys = keys(&VtDecoder::open(&f.path).unwrap());
+        let keys = keys(&VtDecoder::open(&f.path, || true).unwrap());
         eprintln!("HEVC capture: full-sync samples {keys:?}");
         let moves = check_walk(&f.path, true);
         assert!(moves.forward_in_gop > 0 && moves.backward_in_gop > 0, "{moves:?}");
@@ -816,7 +821,7 @@ mod tests {
     fn synth_reordered_matches_frame_source() {
         let f = fixture("synth");
         synth(&f.path, 300);
-        let mut dec = VtDecoder::open(&f.path).unwrap();
+        let mut dec = VtDecoder::open(&f.path, || true).unwrap();
         let n = dec.index.pts.len();
         assert_ne!(dec.index.by_pts, (0..n).collect::<Vec<_>>(), "frames are reordered");
         let leading = (0..n).filter(|&j| dec.index.leading(j)).count();
@@ -846,7 +851,7 @@ mod tests {
     fn reordered_playback_decodes_each_sample_once() {
         let f = fixture("synth-play");
         synth(&f.path, 300);
-        let mut dec = VtDecoder::open(&f.path).unwrap();
+        let mut dec = VtDecoder::open(&f.path, || true).unwrap();
         let mut src = FrameSource::open(&f.path).unwrap();
         let n = dec.index.pts.len();
         for p in 0..n {
@@ -860,7 +865,7 @@ mod tests {
     fn failures_recover_on_the_next_request() {
         let f = fixture("faults");
         capture(&f.path, Codec::H264, 30, 90);
-        let mut dec = VtDecoder::open(&f.path).unwrap();
+        let mut dec = VtDecoder::open(&f.path, || true).unwrap();
         let mut src = FrameSource::open(&f.path).unwrap();
         let t = |i: usize| i as f64 * 1000.0 / 30.0;
         for fault in [Fault::Decode, Fault::Callback, Fault::Wait] {
@@ -881,7 +886,7 @@ mod tests {
     fn a_new_session_keeps_frames_exact() {
         let f = fixture("sessions");
         capture(&f.path, Codec::H264, 30, 90);
-        let mut dec = VtDecoder::open(&f.path).unwrap();
+        let mut dec = VtDecoder::open(&f.path, || true).unwrap();
         let mut src = FrameSource::open(&f.path).unwrap();
         let t = |i: usize| i as f64 * 1000.0 / 30.0;
         objc2::rc::autoreleasepool(|_| {
@@ -912,7 +917,7 @@ mod tests {
     fn a_stopped_walk_keeps_its_progress() {
         let f = fixture("stop");
         capture(&f.path, Codec::H264, 30, 60);
-        let mut dec = VtDecoder::open(&f.path).unwrap();
+        let mut dec = VtDecoder::open(&f.path, || true).unwrap();
         let mut src = FrameSource::open(&f.path).unwrap();
         objc2::rc::autoreleasepool(|_| {
             let asked = std::cell::Cell::new(0);
@@ -925,5 +930,14 @@ mod tests {
             exact(&mut dec, &mut src, 30.0 * 1000.0 / 30.0);
             assert_eq!(dec.submitted, 31, "continues where it stopped");
         });
+    }
+
+    #[test]
+    fn an_open_stops_when_asked() {
+        let f = fixture("open-stop");
+        synth(&f.path, 30);
+        let e = VtDecoder::open(&f.path, || false).err().expect("a stopped open fails");
+        assert!(e.to_string().contains("stopped"), "{e:#}");
+        assert!(VtDecoder::open(&f.path, || true).is_ok());
     }
 }

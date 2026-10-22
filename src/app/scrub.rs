@@ -180,20 +180,23 @@ impl<F> Default for State<F> {
 impl Worker<Frame> {
     /// Decode the first video track of `path` on a new thread. The decoder,
     /// with its sample index, opens on that thread; if it can't, the track
-    /// stays without a frame.
+    /// stays without a frame. Dropping the worker stops an open in progress.
     pub fn open(path: PathBuf, track: &'static str, signal: Arc<Signal>) -> Self {
-        Worker::spawn(track, signal, move || objc2::rc::autoreleasepool(|_| VtDecoder::open(&path)))
+        Worker::spawn(track, signal, move |stopped| objc2::rc::autoreleasepool(|_| VtDecoder::open(&path, || !stopped())))
     }
 }
 
 impl<F: Clone + Send + 'static> Worker<F> {
-    fn spawn<D: Decode<Frame = F>>(track: &'static str, signal: Arc<Signal>, open: impl FnOnce() -> Result<D> + Send + 'static) -> Self {
+    /// `open` makes the decoder on the new thread; its argument tells
+    /// whether the worker was dropped meanwhile.
+    fn spawn<D: Decode<Frame = F>>(track: &'static str, signal: Arc<Signal>, open: impl FnOnce(&dyn Fn() -> bool) -> Result<D> + Send + 'static) -> Self {
         let shared = Arc::new(Shared { state: Mutex::default(), changed: Condvar::new(), signal });
         let s = shared.clone();
         let thread = std::thread::Builder::new()
             .name(format!("glide-preview-{track}"))
-            .spawn(move || match open() {
+            .spawn(move || match open(&|| s.lock().stop) {
                 Ok(dec) => run(dec, &s, track),
+                Err(_) if s.lock().stop => {}
                 Err(e) => {
                     s.report(track, &e);
                     s.lock().broken = true;
@@ -257,10 +260,9 @@ impl<F> Drop for Worker<F> {
     fn drop(&mut self) {
         self.shared.lock().stop = true;
         self.shared.changed.notify_all();
-        // The decode in progress stops at its next batch; the decoder drains
-        // its session when the thread drops it. An open in progress isn't
-        // interrupted: reading the sample table takes about 20 ms for an hour
-        // of 60 fps video.
+        // An open in progress stops within its next few thousand samples, a
+        // decode at its next batch; the decoder drains its session when the
+        // thread drops it.
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -644,7 +646,7 @@ mod tests {
                 w.fetch_add(1, Ordering::SeqCst);
             });
             let c = ctl.clone();
-            let worker = Worker::spawn("test", signal.clone(), move || open.map(|_| Fake { ctl: c, decoded: None }));
+            let worker = Worker::spawn("test", signal.clone(), move |_| open.map(|_| Fake { ctl: c, decoded: None }));
             Rig { ctl, signal, wakes, worker }
         }
 
@@ -969,5 +971,32 @@ mod tests {
         drop(r.worker);
         assert!(r.ctl.dropped.load(Ordering::SeqCst), "the decoder outlived the worker");
         opener.join().unwrap();
+    }
+
+    #[test]
+    fn dropping_a_worker_stops_its_open() {
+        let asked = Arc::new(AtomicUsize::new(0));
+        let a = asked.clone();
+        // An open that takes 10 s unless it's stopped.
+        let worker: Worker<usize> = Worker::spawn("test", Signal::new(|| {}), move |stopped| {
+            let t = Instant::now();
+            while t.elapsed() < Duration::from_secs(10) {
+                a.fetch_add(1, Ordering::SeqCst);
+                if stopped() {
+                    bail!("stopped");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Ok(Fake { ctl: Arc::default(), decoded: None })
+        });
+        let t = Instant::now();
+        while asked.load(Ordering::SeqCst) == 0 && t.elapsed() < Duration::from_secs(10) {
+            std::thread::yield_now();
+        }
+        let shared = worker.shared.clone();
+        let t = Instant::now();
+        drop(worker);
+        assert!(t.elapsed() < Duration::from_secs(2), "the drop waited {:?} for the open", t.elapsed());
+        assert_eq!(shared.lock().logged, 0, "a stopped open isn't a failure");
     }
 }
