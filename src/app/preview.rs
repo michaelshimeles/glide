@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use super::scrub::{Signal, Worker};
 use crate::engine::scene::{Frame, Scene};
+use crate::engine::timemap::TimeMap;
 use crate::media;
 use crate::project::model::Project;
 use crate::project::recording::Recording;
@@ -26,10 +27,10 @@ pub struct Preview {
     camera: Option<Worker<media::Frame>>,
     /// Raised by both workers when they publish a frame.
     signal: Arc<Signal>,
-    /// The playhead each recent screen request was made at, by generation.
+    /// The source time of each recent screen request, by generation.
     asked: VecDeque<(u64, f64)>,
     /// The screen frame on display that answers an older request: its
-    /// generation and playhead, kept while it stays on display.
+    /// generation and source time, kept while it stays on display.
     shown: Option<(u64, f64)>,
     camera_offset: f64,
     target: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
@@ -119,7 +120,7 @@ impl Preview {
         let ahead = next_ms.map(|ms| self.scene.source_ms(self.scene.frame_index(ms)));
         let newest = self.screen.request(src, ahead);
         if self.asked.back().is_none_or(|a| a.0 != newest) {
-            self.asked.push_back((newest, playback_ms));
+            self.asked.push_back((newest, src));
             if self.asked.len() > ASKED {
                 self.asked.pop_front();
             }
@@ -133,7 +134,7 @@ impl Preview {
             });
             (screen, camera)
         });
-        let at = scene_ms(screen.as_ref().map(|p| p.generation), newest, &self.asked, &mut self.shown, playback_ms);
+        let at = scene_ms(screen.as_ref().map(|p| p.generation), newest, &self.asked, &mut self.shown, &self.scene.map, playback_ms);
         let shown = self.scene.frame_index(at);
         let video = screen.as_ref().map_or(0, |p| p.revision) + camera.as_ref().map_or(0, |p| p.revision);
         let key = (shown, h, self.revision, video);
@@ -205,19 +206,21 @@ fn camera_ms(screen_pts: Option<f64>, source_ms: f64, offset: f64) -> f64 {
 /// one frame decodes.
 const ASKED: usize = 256;
 
-/// The playhead to draw the scene at: the one the screen frame on display
-/// (generation `on_display`) was asked for, so cursor, zoom, captions and
-/// masks match the picture under them. `shown` keeps that frame's playhead
-/// once it's found, however many requests follow while it stays on display.
+/// The playhead to draw the scene at: where `map` plays the source time the
+/// screen frame on display (generation `on_display`) was asked for, so
+/// cursor, zoom, captions and masks match the picture under them, also after
+/// an edit moved that moment. `shown` keeps that frame's source time once
+/// it's found, however many requests follow while it stays on display.
 /// `playback_ms` when the frame answers the newest request, when there's no
-/// frame yet, or when its request left `asked` before the frame arrived.
-fn scene_ms(on_display: Option<u64>, newest: u64, asked: &VecDeque<(u64, f64)>, shown: &mut Option<(u64, f64)>, playback_ms: f64) -> f64 {
+/// frame yet, when its request left `asked` before the frame arrived, or
+/// when an edit cut that moment.
+fn scene_ms(on_display: Option<u64>, newest: u64, asked: &VecDeque<(u64, f64)>, shown: &mut Option<(u64, f64)>, map: &TimeMap, playback_ms: f64) -> f64 {
     match on_display {
         Some(g) if g != newest => {
             if shown.is_none_or(|s| s.0 != g) {
                 *shown = asked.iter().rev().find(|a| a.0 == g).copied();
             }
-            shown.map_or(playback_ms, |s| s.1)
+            shown.and_then(|s| map.to_playback(s.1)).unwrap_or(playback_ms)
         }
         _ => playback_ms,
     }
@@ -228,6 +231,8 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::{camera_ms, scene_ms};
+    use crate::engine::timemap::TimeMap;
+    use crate::project::model::Slice;
 
     #[test]
     fn the_camera_follows_the_screen_frame_on_display() {
@@ -239,18 +244,25 @@ mod tests {
 
     #[test]
     fn the_scene_follows_the_screen_frame_on_display() {
+        let map = TimeMap::new(&[], 10_000.0);
         let mut shown = None;
         let mut asked = VecDeque::from([(3, 900.0), (4, 1000.0), (5, 1200.0)]);
         // Generation 4's frame is still on display while the playhead is at
         // 1250 (generation 5 is decoding).
-        assert_eq!(scene_ms(Some(4), 5, &asked, &mut shown, 1250.0), 1000.0);
+        assert_eq!(scene_ms(Some(4), 5, &asked, &mut shown, &map, 1250.0), 1000.0);
         // It stays on display while its request leaves `asked`.
         asked = VecDeque::from([(300, 5000.0)]);
-        assert_eq!(scene_ms(Some(4), 300, &asked, &mut shown, 5000.0), 1000.0);
+        assert_eq!(scene_ms(Some(4), 300, &asked, &mut shown, &map, 5000.0), 1000.0);
+        // An edit cuts the first 500 ms: that moment now plays at 500.
+        let cut = TimeMap::new(&[Slice { start: 500.0, end: 10_000.0, speed: 1.0, ..Default::default() }], 10_000.0);
+        assert_eq!(scene_ms(Some(4), 300, &asked, &mut shown, &cut, 4500.0), 500.0);
         // The frame answers the newest request, or there's none yet.
-        assert_eq!(scene_ms(Some(300), 300, &asked, &mut shown, 5000.0), 5000.0);
-        assert_eq!(scene_ms(None, 300, &asked, &mut shown, 5000.0), 5000.0);
+        assert_eq!(scene_ms(Some(300), 300, &asked, &mut shown, &map, 5000.0), 5000.0);
+        assert_eq!(scene_ms(None, 300, &asked, &mut shown, &map, 5000.0), 5000.0);
         // Its request left `asked` before it arrived.
-        assert_eq!(scene_ms(Some(7), 300, &asked, &mut shown, 5000.0), 5000.0);
+        assert_eq!(scene_ms(Some(7), 300, &asked, &mut shown, &map, 5000.0), 5000.0);
+        // An edit cut its moment.
+        let gone = TimeMap::new(&[Slice { start: 2000.0, end: 10_000.0, speed: 1.0, ..Default::default() }], 10_000.0);
+        assert_eq!(scene_ms(Some(4), 300, &asked, &mut shown, &gone, 3000.0), 3000.0);
     }
 }
