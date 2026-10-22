@@ -28,6 +28,9 @@ pub struct Preview {
     signal: Arc<Signal>,
     /// The playhead each recent screen request was made at, by generation.
     asked: VecDeque<(u64, f64)>,
+    /// The screen frame on display that answers an older request: its
+    /// generation and playhead, kept while it stays on display.
+    shown: Option<(u64, f64)>,
     camera_offset: f64,
     target: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     pub texture_id: Option<egui::TextureId>,
@@ -59,6 +62,7 @@ impl Preview {
             camera,
             signal,
             asked: VecDeque::new(),
+            shown: None,
             camera_offset: rec.meta.camera.as_ref().map_or(0.0, |c| c.offset_ms),
             target: None,
             texture_id: None,
@@ -129,7 +133,7 @@ impl Preview {
             });
             (screen, camera)
         });
-        let at = scene_ms(screen.as_ref().map(|p| p.generation), newest, &self.asked, playback_ms);
+        let at = scene_ms(screen.as_ref().map(|p| p.generation), newest, &self.asked, &mut self.shown, playback_ms);
         let shown = self.scene.frame_index(at);
         let video = screen.as_ref().map_or(0, |p| p.revision) + camera.as_ref().map_or(0, |p| p.revision);
         let key = (shown, h, self.revision, video);
@@ -202,13 +206,19 @@ fn camera_ms(screen_pts: Option<f64>, source_ms: f64, offset: f64) -> f64 {
 const ASKED: usize = 256;
 
 /// The playhead to draw the scene at: the one the screen frame on display
-/// (generation `shown`) was asked for, so cursor, zoom, captions and masks
-/// match the picture under them. `playback_ms` when that frame answers the
-/// newest request, when there's no frame yet, or when its request is too old
-/// to be in `asked`.
-fn scene_ms(shown: Option<u64>, newest: u64, asked: &VecDeque<(u64, f64)>, playback_ms: f64) -> f64 {
-    match shown {
-        Some(g) if g != newest => asked.iter().rev().find(|a| a.0 == g).map_or(playback_ms, |a| a.1),
+/// (generation `on_display`) was asked for, so cursor, zoom, captions and
+/// masks match the picture under them. `shown` keeps that frame's playhead
+/// once it's found, however many requests follow while it stays on display.
+/// `playback_ms` when the frame answers the newest request, when there's no
+/// frame yet, or when its request left `asked` before the frame arrived.
+fn scene_ms(on_display: Option<u64>, newest: u64, asked: &VecDeque<(u64, f64)>, shown: &mut Option<(u64, f64)>, playback_ms: f64) -> f64 {
+    match on_display {
+        Some(g) if g != newest => {
+            if shown.is_none_or(|s| s.0 != g) {
+                *shown = asked.iter().rev().find(|a| a.0 == g).copied();
+            }
+            shown.map_or(playback_ms, |s| s.1)
+        }
         _ => playback_ms,
     }
 }
@@ -229,14 +239,18 @@ mod tests {
 
     #[test]
     fn the_scene_follows_the_screen_frame_on_display() {
-        let asked = VecDeque::from([(3, 900.0), (4, 1000.0), (5, 1200.0)]);
+        let mut shown = None;
+        let mut asked = VecDeque::from([(3, 900.0), (4, 1000.0), (5, 1200.0)]);
         // Generation 4's frame is still on display while the playhead is at
         // 1250 (generation 5 is decoding).
-        assert_eq!(scene_ms(Some(4), 5, &asked, 1250.0), 1000.0);
+        assert_eq!(scene_ms(Some(4), 5, &asked, &mut shown, 1250.0), 1000.0);
+        // It stays on display while its request leaves `asked`.
+        asked = VecDeque::from([(300, 5000.0)]);
+        assert_eq!(scene_ms(Some(4), 300, &asked, &mut shown, 5000.0), 1000.0);
         // The frame answers the newest request, or there's none yet.
-        assert_eq!(scene_ms(Some(5), 5, &asked, 1250.0), 1250.0);
-        assert_eq!(scene_ms(None, 5, &asked, 1250.0), 1250.0);
-        // Too old to be remembered.
-        assert_eq!(scene_ms(Some(1), 5, &asked, 1250.0), 1250.0);
+        assert_eq!(scene_ms(Some(300), 300, &asked, &mut shown, 5000.0), 5000.0);
+        assert_eq!(scene_ms(None, 300, &asked, &mut shown, 5000.0), 5000.0);
+        // Its request left `asked` before it arrived.
+        assert_eq!(scene_ms(Some(7), 300, &asked, &mut shown, 5000.0), 5000.0);
     }
 }
