@@ -1,14 +1,18 @@
 //! Webcam capture (AVCaptureSession) and device enumeration.
 
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, bail};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AnyThread, DefinedClass, define_class, msg_send};
 use objc2_av_foundation::*;
+use objc2_core_foundation::{CFRunLoop, kCFRunLoopDefaultMode};
 use objc2_core_media::CMSampleBuffer;
-use objc2_core_video::kCVPixelBufferPixelFormatTypeKey;
+use objc2_core_video::{
+    kCVPixelBufferPixelFormatTypeKey, CVPixelBufferGetHeight, CVPixelBufferGetWidth,
+};
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol};
 use dispatch2::DispatchQueue;
 
@@ -91,19 +95,161 @@ fn ios_raw() -> Vec<Retained<AVCaptureDevice>> {
     unsafe { discover(&[AVCaptureDeviceTypeExternal], AVMediaTypeMuxed.unwrap()) }
 }
 
+/// Poll interval while waiting on a screen-capture device.
+const IOS_POLL: Duration = Duration::from_millis(100);
+
+/// Wait one poll interval with the run loop running.
+///
+/// CoreMediaIO delivers both the new device and the capture session's own
+/// setup through the calling thread's run loop, so a plain sleep waits
+/// forever. Running the loop lets that work land; it returns at once when the
+/// thread has no sources yet, so sleep off whatever it gives back.
+fn poll_run_loop() {
+    let spun = Instant::now();
+    CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, IOS_POLL.as_secs_f64(), false);
+    if let Some(rest) = IOS_POLL.checked_sub(spun.elapsed()) {
+        std::thread::sleep(rest);
+    }
+}
+
+fn wait_for_ios_raw(timeout: Duration) -> Vec<Retained<AVCaptureDevice>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let devices = ios_raw();
+        if !devices.is_empty() || Instant::now() >= deadline {
+            return devices;
+        }
+        poll_run_loop();
+    }
+}
+
 /// Connected iPhones/iPads whose screens can be recorded.
 pub fn ios_devices() -> Vec<Device> {
     ios_raw().iter().map(|d| describe(d)).collect()
 }
 
-/// An iOS device's current screen size in pixels.
-pub fn ios_dimensions(id: &str) -> Option<(u32, u32)> {
-    let dev = ios_raw().into_iter().find(|d| unsafe { d.uniqueID().to_string() } == id)?;
+/// Wait for CoreMediaIO to publish newly enabled USB screen-capture devices.
+///
+/// Enabling the private screen-capture device class starts Apple's helper
+/// asynchronously. A fresh process can otherwise complete its first device
+/// scan before the helper has published the iPhone or iPad. Call this from a
+/// thread whose run loop can be run: that is where the device arrives.
+pub fn ios_devices_wait(timeout: Duration) -> Vec<Device> {
+    wait_for_ios_raw(timeout).iter().map(|d| describe(d)).collect()
+}
+
+fn format_dimensions(format: &AVCaptureDeviceFormat) -> Option<(u32, u32)> {
     unsafe {
-        let desc = dev.activeFormat().formatDescription();
+        let desc = format.formatDescription();
         let dims = objc2_core_media::CMVideoFormatDescriptionGetDimensions(&desc);
         (dims.width > 0 && dims.height > 0).then_some((dims.width as u32, dims.height as u32))
     }
+}
+
+fn input_dimensions(input: &AVCaptureDeviceInput) -> Option<(u32, u32)> {
+    unsafe {
+        input
+            .ports()
+            .iter()
+            .filter_map(|port| port.formatDescription())
+            .filter_map(|desc| {
+                let dims = objc2_core_media::CMVideoFormatDescriptionGetDimensions(&desc);
+                (dims.width > 0 && dims.height > 0).then_some((dims.width as u32, dims.height as u32))
+            })
+            .max_by_key(|(width, height)| u64::from(*width) * u64::from(*height))
+    }
+}
+
+struct DimensionProbeIvars {
+    sender: Mutex<Option<mpsc::SyncSender<(u32, u32)>>>,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "GlideDimensionProbeOutput"]
+    #[ivars = DimensionProbeIvars]
+    struct DimensionProbeOutput;
+
+    unsafe impl NSObjectProtocol for DimensionProbeOutput {}
+
+    unsafe impl AVCaptureVideoDataOutputSampleBufferDelegate for DimensionProbeOutput {
+        #[unsafe(method(captureOutput:didOutputSampleBuffer:fromConnection:))]
+        unsafe fn did_output(&self, _o: &AVCaptureOutput, sb: &CMSampleBuffer, _c: &AVCaptureConnection) {
+            if let Some(pb) = unsafe { sb.image_buffer() }
+                && let Some(sender) = self.ivars().sender.lock().unwrap_or_else(|e| e.into_inner()).take()
+            {
+                let size = (CVPixelBufferGetWidth(&pb) as u32, CVPixelBufferGetHeight(&pb) as u32);
+                let _ = sender.send(size);
+            }
+        }
+    }
+);
+
+/// How long to wait for the device's first frame before giving up on it.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn probe_dimensions(dev: &AVCaptureDevice) -> Option<(u32, u32)> {
+    unsafe {
+        let input = AVCaptureDeviceInput::deviceInputWithDevice_error(dev).ok()?;
+        let session = AVCaptureSession::new();
+        if !session.canAddInput(&input) {
+            return None;
+        }
+        session.addInput(&input);
+        let output = AVCaptureVideoDataOutput::new();
+        output.setVideoSettings(Some(&dict(vec![(
+            cf_ns(kCVPixelBufferPixelFormatTypeKey),
+            num_i(PIX_BGRA as i64),
+        )])));
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let delegate = DimensionProbeOutput::alloc().set_ivars(DimensionProbeIvars {
+            sender: Mutex::new(Some(sender)),
+        });
+        let delegate: Retained<DimensionProbeOutput> = msg_send![super(delegate), init];
+        let queue = DispatchQueue::new("glide.ios-dimension-probe", None);
+        output.setSampleBufferDelegate_queue(Some(ProtocolObject::from_ref(&*delegate)), Some(&queue));
+        if !session.canAddOutput(&output) {
+            return None;
+        }
+        session.addOutput(&output);
+        session.startRunning();
+        let deadline = Instant::now() + PROBE_TIMEOUT;
+        let dimensions = loop {
+            match receiver.try_recv() {
+                Ok(size) => break Some(size),
+                Err(mpsc::TryRecvError::Disconnected) => break None,
+                Err(mpsc::TryRecvError::Empty) if Instant::now() >= deadline => break None,
+                Err(mpsc::TryRecvError::Empty) => poll_run_loop(),
+            }
+        };
+        session.stopRunning();
+        dimensions
+    }
+}
+
+fn device_dimensions(dev: &AVCaptureDevice) -> Option<(u32, u32)> {
+    unsafe {
+        let input = AVCaptureDeviceInput::deviceInputWithDevice_error(dev).ok();
+        if let Some(dimensions) = input.as_ref().and_then(|input| input_dimensions(input)) {
+            return Some(dimensions);
+        }
+        probe_dimensions(dev).or_else(|| {
+            format_dimensions(&dev.activeFormat()).or_else(|| {
+                dev.formats()
+                    .iter()
+                    .filter_map(|format| format_dimensions(&format))
+                    .max_by_key(|(width, height)| u64::from(*width) * u64::from(*height))
+            })
+        })
+    }
+}
+
+/// An iOS device's current screen size in pixels.
+pub fn ios_dimensions(id: &str) -> Option<(u32, u32)> {
+    wait_for_ios_raw(Duration::from_secs(5))
+        .into_iter()
+        .find(|d| unsafe { d.uniqueID().to_string() } == id)
+        .and_then(|dev| device_dimensions(&dev))
 }
 
 pub fn cameras() -> Vec<Device> {
