@@ -125,9 +125,10 @@ impl Preview {
             Some(p) if p.generation != newest => scene_ms(&self.scene, p.source_ms),
             _ => Some(playback_ms),
         };
-        let Some(at) = at.or_else(|| (resized || self.last.is_none()).then_some(playback_ms)) else {
+        let Some(at) = at.or_else(|| self.last.is_none().then_some(playback_ms)) else {
             // An edit cut that moment or moved it between preview frames:
-            // keep the last picture until the new frame arrives.
+            // keep the last picture, at its old size if the size changed,
+            // until the new frame arrives.
             return false;
         };
         let shown = self.scene.frame_index(at);

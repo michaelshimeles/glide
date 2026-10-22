@@ -14,6 +14,10 @@ fn drawn_at(ed: &Editor) -> f64 {
     ed.preview.last_frame.as_ref().expect("a drawn frame").playback_ms
 }
 
+fn width(ed: &Editor) -> u32 {
+    ed.preview.read_pixels().expect("a drawn picture").0
+}
+
 #[test]
 fn the_scene_waits_for_the_video_frame() {
     let dir = std::env::temp_dir().join(format!("glide-preview-{}", std::process::id()));
@@ -42,19 +46,22 @@ fn the_scene_waits_for_the_video_frame() {
         shown = to;
     }
 
-    // A jump, then an edit that cuts the moment still on display: the
-    // preview keeps its last picture until the new frame arrives.
+    // A jump, then an edit that cuts the moment still on display and a new
+    // preview size: the preview keeps its last picture, at its old size,
+    // until the new frame arrives.
     ed.preview.draw(1900.0, None, SIZE);
     let mut cut = ed.project.clone();
     cut.timeline.slices = vec![Slice { start: 0.0, end: 3000.0, speed: 1.0, ..Default::default() }];
     ed.commit(cut);
-    ed.preview.draw(1900.0, None, SIZE);
+    let bigger = (800, 500);
+    ed.preview.draw(1900.0, None, bigger);
     if !ed.preview.settle(Duration::ZERO) {
         assert_eq!(drawn_at(&ed), shown, "the last picture kept");
+        assert_eq!(width(&ed), SIZE.0, "the last picture kept at its size");
     }
     assert!(ed.preview.settle(Duration::from_secs(10)), "no video frame after the edit");
-    ed.preview.draw(1900.0, None, SIZE);
-    assert_eq!(drawn_at(&ed), 1900.0);
+    ed.preview.draw(1900.0, None, bigger);
+    assert_eq!((drawn_at(&ed), width(&ed)), (1900.0, bigger.0));
 
     let _ = std::fs::remove_dir_all(&dir);
 }
