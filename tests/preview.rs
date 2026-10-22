@@ -1,0 +1,47 @@
+//! The preview draws its scene (cursor, zoom, captions, masks) at the time
+//! of the video frame on display. After a jump that frame is the old one
+//! until the new one decodes, and the scene waits with it.
+
+use std::time::Duration;
+
+use glide::app::editor::Editor;
+use glide::render::Gpu;
+
+const SIZE: (u32, u32) = (640, 400);
+
+fn drawn_at(ed: &Editor) -> f64 {
+    ed.preview.last_frame.as_ref().expect("a drawn frame").playback_ms
+}
+
+#[test]
+fn the_scene_waits_for_the_video_frame() {
+    let dir = std::env::temp_dir().join(format!("glide-preview-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Preview.glide");
+    // A keyframe every 2 s.
+    glide::synth::write_package(&path, 4.0, 1280, 800).unwrap();
+    let mut ed = Editor::open(&path, Gpu::headless().unwrap()).unwrap();
+
+    let mut shown = 100.0;
+    ed.preview.draw(shown, None, SIZE);
+    assert!(ed.preview.settle(Duration::from_secs(10)), "no video frame");
+    // Jumps to the end of a GOP: each new frame decodes from its keyframe,
+    // which takes longer than a draw.
+    let mut outran = 0;
+    for to in [1900.0, 3900.0, 1800.0, 3800.0] {
+        ed.preview.draw(to, None, SIZE);
+        // Still decoding now, so it was when the draw read the frame.
+        if !ed.preview.settle(Duration::ZERO) {
+            assert_eq!(drawn_at(&ed), shown, "the scene at the time of the frame on display");
+            outran += 1;
+        }
+        assert!(ed.preview.settle(Duration::from_secs(10)), "no video frame for {to}");
+        ed.preview.draw(to, None, SIZE);
+        assert_eq!(drawn_at(&ed), to);
+        shown = to;
+    }
+    assert!(outran > 0, "every jump decoded before its draw read the frame");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

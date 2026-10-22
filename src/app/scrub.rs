@@ -208,12 +208,13 @@ impl<F: Clone + Send + 'static> Worker<F> {
     /// redraw's source time, to decode before it's asked for; `None`
     /// otherwise. Asking for the same time again starts no new generation.
     /// If the frame was decoded ahead, it's published before this returns,
-    /// for the caller's next read; that doesn't wake the UI.
-    pub fn request(&self, source_ms: f64, ahead: Option<f64>) {
+    /// for the caller's next read; that doesn't wake the UI. Returns the
+    /// request's generation.
+    pub fn request(&self, source_ms: f64, ahead: Option<f64>) -> u64 {
         let mut s = self.shared.lock();
         let moved = s.request.is_none_or(|(_, t)| t != source_ms);
         if !moved && s.ahead == ahead {
-            return;
+            return s.request.map_or(0, |(g, _)| g);
         }
         if moved {
             let generation = s.request.map_or(1, |(g, _)| g + 1);
@@ -223,8 +224,10 @@ impl<F: Clone + Send + 'static> Worker<F> {
             }
         }
         s.ahead = ahead;
+        let generation = s.request.map_or(0, |(g, _)| g);
         drop(s);
         self.shared.changed.notify_all();
+        generation
     }
 
     /// The latest published frame. Read it inside `Signal::read`.
@@ -255,7 +258,9 @@ impl<F> Drop for Worker<F> {
         self.shared.lock().stop = true;
         self.shared.changed.notify_all();
         // The decode in progress stops at its next batch; the decoder drains
-        // its session when the thread drops it.
+        // its session when the thread drops it. An open in progress isn't
+        // interrupted: reading the sample table takes about 20 ms for an hour
+        // of 60 fps video.
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }

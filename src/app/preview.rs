@@ -1,9 +1,11 @@
 //! Editor preview: renders the current frame on the UI's GPU device and
 //! shows it as an egui texture. Video frames are used in place (zero copy).
 //! They're decoded on a worker thread per track (`scrub`); until a frame
-//! arrives the preview shows the last one it has. The camera follows the
-//! screen frame on display, so both tracks show the same moment.
+//! arrives the preview shows the last one it has. The camera and the scene
+//! (cursor, zoom, captions, masks) follow the screen frame on display, so
+//! everything shows the same moment.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,6 +26,8 @@ pub struct Preview {
     camera: Option<Worker<media::Frame>>,
     /// Raised by both workers when they publish a frame.
     signal: Arc<Signal>,
+    /// The playhead each recent screen request was made at, by generation.
+    asked: VecDeque<(u64, f64)>,
     camera_offset: f64,
     target: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     pub texture_id: Option<egui::TextureId>,
@@ -54,6 +58,7 @@ impl Preview {
             screen,
             camera,
             signal,
+            asked: VecDeque::new(),
             camera_offset: rec.meta.camera.as_ref().map_or(0.0, |c| c.offset_ms),
             target: None,
             texture_id: None,
@@ -108,7 +113,13 @@ impl Preview {
         // Through the time map, so cuts and slice speed land on the right
         // source frame.
         let ahead = next_ms.map(|ms| self.scene.source_ms(self.scene.frame_index(ms)));
-        self.screen.request(src, ahead);
+        let newest = self.screen.request(src, ahead);
+        if self.asked.back().is_none_or(|a| a.0 != newest) {
+            self.asked.push_back((newest, playback_ms));
+            if self.asked.len() > ASKED {
+                self.asked.pop_front();
+            }
+        }
         let (screen, camera) = self.signal.read(|| {
             let screen = self.screen.latest();
             let camera = self.camera.as_ref().and_then(|c| {
@@ -118,8 +129,10 @@ impl Preview {
             });
             (screen, camera)
         });
+        let at = scene_ms(screen.as_ref().map(|p| p.generation), newest, &self.asked, playback_ms);
+        let shown = self.scene.frame_index(at);
         let video = screen.as_ref().map_or(0, |p| p.revision) + camera.as_ref().map_or(0, |p| p.revision);
-        let key = (f, h, self.revision, video);
+        let key = (shown, h, self.revision, video);
         let gpu = self.renderer.gpu().clone();
         let resized = self.target.as_ref().is_none_or(|t| t.2 != (w, h));
         if !resized && self.last == Some(key) {
@@ -139,7 +152,7 @@ impl Preview {
             let view = texture.create_view(&Default::default());
             self.target = Some((texture, view, (w, h)));
         }
-        let frame = self.scene.frame(playback_ms, h as f64);
+        let frame = self.scene.frame(at, h as f64);
         if let Some(vf) = screen.map(|p| p.frame) {
             match self.cache.as_ref().and_then(|c| c.wrap(&vf.pb.0, wgpu::TextureUsages::TEXTURE_BINDING)) {
                 Some(wr) => self.renderer.set_screen_wrapped(wr),
@@ -184,9 +197,27 @@ fn camera_ms(screen_pts: Option<f64>, source_ms: f64, offset: f64) -> f64 {
     screen_pts.unwrap_or(source_ms) - offset
 }
 
+/// Screen requests `Preview::asked` remembers: more than a scrub makes while
+/// one frame decodes.
+const ASKED: usize = 256;
+
+/// The playhead to draw the scene at: the one the screen frame on display
+/// (generation `shown`) was asked for, so cursor, zoom, captions and masks
+/// match the picture under them. `playback_ms` when that frame answers the
+/// newest request, when there's no frame yet, or when its request is too old
+/// to be in `asked`.
+fn scene_ms(shown: Option<u64>, newest: u64, asked: &VecDeque<(u64, f64)>, playback_ms: f64) -> f64 {
+    match shown {
+        Some(g) if g != newest => asked.iter().rev().find(|a| a.0 == g).map_or(playback_ms, |a| a.1),
+        _ => playback_ms,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::camera_ms;
+    use std::collections::VecDeque;
+
+    use super::{camera_ms, scene_ms};
 
     #[test]
     fn the_camera_follows_the_screen_frame_on_display() {
@@ -194,5 +225,18 @@ mod tests {
         assert_eq!(camera_ms(Some(1000.0), 1200.0, 250.0), 750.0);
         // No screen frame yet: the playhead.
         assert_eq!(camera_ms(None, 1200.0, 250.0), 950.0);
+    }
+
+    #[test]
+    fn the_scene_follows_the_screen_frame_on_display() {
+        let asked = VecDeque::from([(3, 900.0), (4, 1000.0), (5, 1200.0)]);
+        // Generation 4's frame is still on display while the playhead is at
+        // 1250 (generation 5 is decoding).
+        assert_eq!(scene_ms(Some(4), 5, &asked, 1250.0), 1000.0);
+        // The frame answers the newest request, or there's none yet.
+        assert_eq!(scene_ms(Some(5), 5, &asked, 1250.0), 1250.0);
+        assert_eq!(scene_ms(None, 5, &asked, 1250.0), 1250.0);
+        // Too old to be remembered.
+        assert_eq!(scene_ms(Some(1), 5, &asked, 1250.0), 1250.0);
     }
 }
