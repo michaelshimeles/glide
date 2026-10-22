@@ -101,6 +101,8 @@ impl Signal {
 #[derive(Clone)]
 pub struct Published<F> {
     pub generation: u64,
+    /// The source time of the request it answers.
+    pub source_ms: f64,
     /// Publications so far on this track: changes with every new frame.
     pub revision: u64,
     pub frame: F,
@@ -223,7 +225,7 @@ impl<F: Clone + Send + 'static> Worker<F> {
             let generation = s.request.map_or(1, |(g, _)| g + 1);
             s.request = Some((generation, source_ms));
             if let Some(Prefetched { sample, frame: Some(frame), .. }) = s.prefetched.take_if(|p| p.frame.is_some() && p.span.contains(&source_ms)) {
-                s.show(generation, sample, frame);
+                s.show(generation, source_ms, sample, frame);
             }
         }
         s.ahead = ahead;
@@ -271,11 +273,11 @@ impl<F> Drop for Worker<F> {
 
 impl<F: Clone> State<F> {
     /// Make `frame`, sample `sample`, the published frame for `generation`.
-    fn show(&mut self, generation: u64, sample: usize, frame: F) {
+    fn show(&mut self, generation: u64, source_ms: f64, sample: usize, frame: F) {
         #[cfg(test)]
         self.history.push((generation, frame.clone()));
         let revision = self.published.as_ref().map_or(0, |p| p.revision) + 1;
-        self.published = Some(Published { generation, revision, frame, sample });
+        self.published = Some(Published { generation, source_ms, revision, frame, sample });
         self.done = self.done.max(generation);
         self.failed = None;
     }
@@ -287,7 +289,7 @@ impl<F> Shared<F> {
     }
 
     /// Publish `frame`, sample `i` decoded for `generation` at source time
-    /// `t`. It carries the newest generation if that resolves to the same
+    /// `t`. It answers the newest request if that resolves to the same
     /// sample, else its own while the newest time is within `SCRUB` of `t`.
     /// It's dropped after a jump, or when it's no newer than the published
     /// frame.
@@ -297,17 +299,17 @@ impl<F> Shared<F> {
     {
         let mut s = self.lock();
         let Some((newest, newest_t)) = s.request else { return false };
-        let generation = if newest == generation || target(newest_t) == i {
-            newest
+        let (generation, t) = if newest == generation || target(newest_t) == i {
+            (newest, newest_t)
         } else if (newest_t - t).abs() <= SCRUB {
-            generation
+            (generation, t)
         } else {
             return false;
         };
         if s.published.as_ref().is_some_and(|p| p.generation >= generation) {
             return false;
         }
-        s.show(generation, i, frame);
+        s.show(generation, t, i, frame);
         // Raised before unlocking: whoever sees the frame settled also sees
         // the wake.
         self.signal.raise();
@@ -758,6 +760,21 @@ mod tests {
         assert_eq!(shared.lock().history, vec![(3, 45)]);
     }
 
+    #[test]
+    fn a_publication_carries_the_time_it_answers() {
+        let shared = Shared { state: Mutex::default(), changed: Condvar::new(), signal: Signal::new(|| {}) };
+        let target = |t: f64| (t / STEP) as usize;
+        let answers = |s: &Shared<usize>| s.lock().published.as_ref().map(|p| (p.generation, p.source_ms));
+        // A walk that finishes close to the newest request: its own time.
+        shared.lock().request = Some((4, at(47)));
+        assert!(shared.publish(2, at(44), 44, 44, target));
+        assert_eq!(answers(&shared), Some((2, at(44))));
+        // A walk whose sample the newest request resolves to: the newest time.
+        shared.lock().request = Some((5, at(46) + 5.0));
+        assert!(shared.publish(3, at(46), 46, 46, target));
+        assert_eq!(answers(&shared), Some((5, at(46) + 5.0)));
+    }
+
     /// Show 40 while sample 41 is decoded ahead, and wait until it's ready.
     fn prefetched_41() -> Rig {
         let r = Rig::new();
@@ -792,9 +809,9 @@ mod tests {
         // Anywhere in 41's span, as the next draw asks for it.
         let seen = r.signal.read(|| {
             r.worker.request(at(41) + 7.0, None);
-            r.worker.latest().map(|p| (p.generation, p.frame))
+            r.worker.latest().map(|p| (p.generation, p.frame, p.source_ms))
         });
-        assert_eq!(seen, Some((2, 41)), "the draw that asked for 41 didn't get it");
+        assert_eq!(seen, Some((2, 41, at(41) + 7.0)), "the draw that asked for 41 didn't get it");
         assert_eq!(r.history(), vec![(1, 40), (2, 41)]);
         r.settle();
         r.idle();

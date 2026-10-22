@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use glide::app::editor::Editor;
+use glide::project::model::Slice;
 use glide::render::Gpu;
 
 const SIZE: (u32, u32) = (640, 400);
@@ -40,6 +41,20 @@ fn the_scene_waits_for_the_video_frame() {
         assert_eq!(drawn_at(&ed), to);
         shown = to;
     }
+
+    // A jump, then an edit that cuts the moment still on display: the
+    // preview keeps its last picture until the new frame arrives.
+    ed.preview.draw(1900.0, None, SIZE);
+    let mut cut = ed.project.clone();
+    cut.timeline.slices = vec![Slice { start: 0.0, end: 3000.0, speed: 1.0, ..Default::default() }];
+    ed.commit(cut);
+    ed.preview.draw(1900.0, None, SIZE);
+    if !ed.preview.settle(Duration::ZERO) {
+        assert_eq!(drawn_at(&ed), shown, "the last picture kept");
+    }
+    assert!(ed.preview.settle(Duration::from_secs(10)), "no video frame after the edit");
+    ed.preview.draw(1900.0, None, SIZE);
+    assert_eq!(drawn_at(&ed), 1900.0);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

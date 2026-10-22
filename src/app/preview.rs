@@ -5,14 +5,12 @@
 //! (cursor, zoom, captions, masks) follow the screen frame on display, so
 //! everything shows the same moment.
 
-use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::scrub::{Signal, Worker};
 use crate::engine::scene::{Frame, Scene};
-use crate::engine::timemap::TimeMap;
 use crate::media;
 use crate::project::model::Project;
 use crate::project::recording::Recording;
@@ -27,11 +25,6 @@ pub struct Preview {
     camera: Option<Worker<media::Frame>>,
     /// Raised by both workers when they publish a frame.
     signal: Arc<Signal>,
-    /// The source time of each recent screen request, by generation.
-    asked: VecDeque<(u64, f64)>,
-    /// The screen frame on display that answers an older request: its
-    /// generation and source time, kept while it stays on display.
-    shown: Option<(u64, f64)>,
     camera_offset: f64,
     target: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     pub texture_id: Option<egui::TextureId>,
@@ -62,8 +55,6 @@ impl Preview {
             screen,
             camera,
             signal,
-            asked: VecDeque::new(),
-            shown: None,
             camera_offset: rec.meta.camera.as_ref().map_or(0.0, |c| c.offset_ms),
             target: None,
             texture_id: None,
@@ -119,12 +110,6 @@ impl Preview {
         // source frame.
         let ahead = next_ms.map(|ms| self.scene.source_ms(self.scene.frame_index(ms)));
         let newest = self.screen.request(src, ahead);
-        if self.asked.back().is_none_or(|a| a.0 != newest) {
-            self.asked.push_back((newest, src));
-            if self.asked.len() > ASKED {
-                self.asked.pop_front();
-            }
-        }
         let (screen, camera) = self.signal.read(|| {
             let screen = self.screen.latest();
             let camera = self.camera.as_ref().and_then(|c| {
@@ -134,12 +119,21 @@ impl Preview {
             });
             (screen, camera)
         });
-        let at = scene_ms(screen.as_ref().map(|p| p.generation), newest, &self.asked, &mut self.shown, &self.scene.map, playback_ms);
+        let resized = self.target.as_ref().is_none_or(|t| t.2 != (w, h));
+        // The scene at the moment of the screen frame on display.
+        let at = match &screen {
+            Some(p) if p.generation != newest => scene_ms(&self.scene, p.source_ms),
+            _ => Some(playback_ms),
+        };
+        let Some(at) = at.or_else(|| (resized || self.last.is_none()).then_some(playback_ms)) else {
+            // An edit cut that moment or moved it between preview frames:
+            // keep the last picture until the new frame arrives.
+            return false;
+        };
         let shown = self.scene.frame_index(at);
         let video = screen.as_ref().map_or(0, |p| p.revision) + camera.as_ref().map_or(0, |p| p.revision);
         let key = (shown, h, self.revision, video);
         let gpu = self.renderer.gpu().clone();
-        let resized = self.target.as_ref().is_none_or(|t| t.2 != (w, h));
         if !resized && self.last == Some(key) {
             return false;
         }
@@ -202,37 +196,20 @@ fn camera_ms(screen_pts: Option<f64>, source_ms: f64, offset: f64) -> f64 {
     screen_pts.unwrap_or(source_ms) - offset
 }
 
-/// Screen requests `Preview::asked` remembers: more than a scrub makes while
-/// one frame decodes.
-const ASKED: usize = 256;
-
-/// The playhead to draw the scene at: where `map` plays the source time the
-/// screen frame on display (generation `on_display`) was asked for, so
-/// cursor, zoom, captions and masks match the picture under them, also after
-/// an edit moved that moment. `shown` keeps that frame's source time once
-/// it's found, however many requests follow while it stays on display.
-/// `playback_ms` when the frame answers the newest request, when there's no
-/// frame yet, when its request left `asked` before the frame arrived, or
-/// when an edit cut that moment.
-fn scene_ms(on_display: Option<u64>, newest: u64, asked: &VecDeque<(u64, f64)>, shown: &mut Option<(u64, f64)>, map: &TimeMap, playback_ms: f64) -> f64 {
-    match on_display {
-        Some(g) if g != newest => {
-            if shown.is_none_or(|s| s.0 != g) {
-                *shown = asked.iter().rev().find(|a| a.0 == g).copied();
-            }
-            shown.and_then(|s| map.to_playback(s.1)).unwrap_or(playback_ms)
-        }
-        _ => playback_ms,
-    }
+/// Where `scene` plays `source_ms`, the time an older screen frame on
+/// display answers: a playhead whose preview frame shows exactly that
+/// moment, so cursor, zoom, captions and masks match the picture under them.
+/// None when an edit cut that moment or moved it between preview frames.
+fn scene_ms(scene: &Scene, source_ms: f64) -> Option<f64> {
+    let pb = scene.map.to_playback(source_ms)?;
+    ((scene.source_ms(scene.frame_index(pb)) - source_ms).abs() < 1e-6).then_some(pb)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
-
     use super::{camera_ms, scene_ms};
-    use crate::engine::timemap::TimeMap;
-    use crate::project::model::Slice;
+    use crate::engine::scene::Scene;
+    use crate::project::model::{Project, Slice};
 
     #[test]
     fn the_camera_follows_the_screen_frame_on_display() {
@@ -243,26 +220,26 @@ mod tests {
     }
 
     #[test]
-    fn the_scene_follows_the_screen_frame_on_display() {
-        let map = TimeMap::new(&[], 10_000.0);
-        let mut shown = None;
-        let mut asked = VecDeque::from([(3, 900.0), (4, 1000.0), (5, 1200.0)]);
-        // Generation 4's frame is still on display while the playhead is at
-        // 1250 (generation 5 is decoding).
-        assert_eq!(scene_ms(Some(4), 5, &asked, &mut shown, &map, 1250.0), 1000.0);
-        // It stays on display while its request leaves `asked`.
-        asked = VecDeque::from([(300, 5000.0)]);
-        assert_eq!(scene_ms(Some(4), 300, &asked, &mut shown, &map, 5000.0), 1000.0);
+    fn the_scene_finds_the_moment_of_an_older_frame() {
+        let rec = crate::synth::recording(1920, 1080, 10_000.0);
+        let edit = |slices: &[(f64, f64, f64)]| {
+            let mut p = Project::default();
+            p.timeline.slices = slices.iter().map(|&(start, end, speed)| Slice { start, end, speed, ..Default::default() }).collect();
+            Scene::new(p, &rec, 60.0)
+        };
+        // The frame at playhead 1000 asked for source 1000.
+        let asked = edit(&[]).source_ms(60);
+        assert_eq!(scene_ms(&edit(&[]), asked), Some(1000.0));
         // An edit cuts the first 500 ms: that moment now plays at 500.
-        let cut = TimeMap::new(&[Slice { start: 500.0, end: 10_000.0, speed: 1.0, ..Default::default() }], 10_000.0);
-        assert_eq!(scene_ms(Some(4), 300, &asked, &mut shown, &cut, 4500.0), 500.0);
-        // The frame answers the newest request, or there's none yet.
-        assert_eq!(scene_ms(Some(300), 300, &asked, &mut shown, &map, 5000.0), 5000.0);
-        assert_eq!(scene_ms(None, 300, &asked, &mut shown, &map, 5000.0), 5000.0);
-        // Its request left `asked` before it arrived.
-        assert_eq!(scene_ms(Some(7), 300, &asked, &mut shown, &map, 5000.0), 5000.0);
-        // An edit cut its moment.
-        let gone = TimeMap::new(&[Slice { start: 2000.0, end: 10_000.0, speed: 1.0, ..Default::default() }], 10_000.0);
-        assert_eq!(scene_ms(Some(4), 300, &asked, &mut shown, &gone, 3000.0), 3000.0);
+        assert_eq!(scene_ms(&edit(&[(500.0, 10_000.0, 1.0)]), asked), Some(500.0));
+        // It cuts the moment itself.
+        assert_eq!(scene_ms(&edit(&[(2000.0, 10_000.0, 1.0)]), asked), None);
+        // A cut right after it: playhead 1000 now shows the next slice.
+        assert_eq!(scene_ms(&edit(&[(0.0, 1000.0, 1.0), (2000.0, 10_000.0, 1.0)]), asked), None);
+        // A speed that puts it between two preview frames.
+        assert_eq!(scene_ms(&edit(&[(0.0, 10_000.0, 1.25)]), edit(&[]).source_ms(1)), None);
+        // Speed slices without an edit: every frame finds its own moment.
+        let fast = edit(&[(0.0, 4000.0, 2.0), (4000.0, 10_000.0, 0.5)]);
+        assert!((0..300).all(|f| scene_ms(&fast, fast.source_ms(f)).map(|pb| fast.frame_index(pb)) == Some(f)));
     }
 }
