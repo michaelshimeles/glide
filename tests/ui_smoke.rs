@@ -15,7 +15,10 @@ fn frame(ctx: &egui::Context, t: f64, f: impl FnMut(&mut egui::Ui)) {
         time: Some(t),
         ..Default::default()
     };
-    let _ = ctx.run_ui(input, f);
+    let mut out = ctx.run_ui(input, f);
+    // Headless harness: no backend consumes the frame's texture uploads —
+    // clear them or epaint's Drop panics on the unapplied TexturesDelta.
+    out.textures_delta.clear();
 }
 
 #[test]

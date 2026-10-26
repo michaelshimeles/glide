@@ -908,8 +908,8 @@ fn bubble_rect(style: &crate::project::model::CameraStyle, frame: egui::Rect, ca
 fn outline_mesh(pts: &[egui::Pos2], c: egui::Pos2, tex: egui::TextureId, color: Color32, uv: impl Fn(egui::Pos2) -> egui::Pos2) -> egui::Mesh {
     let mut m = egui::Mesh::with_texture(tex);
     let n = pts.len() as u32;
-    m.colored_vertex(c, color);
-    m.vertices[0].uv = uv(c);
+    // coloured_vertex asserts no texture is set; this mesh samples `tex`
+    m.vertices.push(egui::epaint::Vertex { pos: c, uv: uv(c), color });
     for (i, &p) in pts.iter().enumerate() {
         let (prev, next) = (pts[(i + pts.len() - 1) % pts.len()], pts[(i + 1) % pts.len()]);
         let t = next - prev;
