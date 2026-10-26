@@ -299,7 +299,14 @@ impl Recorder {
             test_pattern: matches!(opts.target, Target::Pattern).then_some(false),
             audio_layout: AudioLayout::Stems,
             gains_db: [0.0, 0.0],
-            mic_backend: if screen::captures_microphone() { MicBackend::Sck } else { MicBackend::Avcapture },
+            // A synthetic source has no ScreenCaptureKit stream, so the
+            // ScreenCaptureKit mic backend can never deliver there; fall back
+            // to the AVCaptureSession input the same way older macOS does.
+            mic_backend: if screen::captures_microphone() && !matches!(opts.target, Target::Pattern) {
+                MicBackend::Sck
+            } else {
+                MicBackend::Avcapture
+            },
             scene: CapScene::Screen,
             hide_desktop_icons: opts.hide_desktop_icons,
             hide_dock: opts.hide_dock,
