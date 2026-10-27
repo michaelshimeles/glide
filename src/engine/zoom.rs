@@ -148,11 +148,13 @@ pub fn focus_at(timeline: &Timeline, events: &Events, sizes: &Sizes, t: f64, cur
         Some(z) => {
             let point = match z.mode {
                 ZoomMode::Manual { target } => sizes.crop.at(target),
-                ZoomMode::FollowMouse => cursor.unwrap_or(center),
+                ZoomMode::FollowMouse | ZoomMode::Loupe => cursor.unwrap_or(center),
                 ZoomMode::Auto => auto_focus(z, events, sizes, t).unwrap_or(center),
             };
             let snap = if matches!(z.mode, ZoomMode::Manual { .. }) { 0.0 } else { z.snap_edges };
-            Focus { point, zoom: z.scale.max(1.0), snap }
+            // A loupe magnifies inside its lens only; the screen stays at rest.
+            let zoom = if matches!(z.mode, ZoomMode::Loupe) { 1.0 } else { z.scale.max(1.0) };
+            Focus { point, zoom, snap }
         }
         None => Focus { point: cursor.unwrap_or(center), zoom: 1.0, snap: FOLLOW_SNAP },
     }

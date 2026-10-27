@@ -415,6 +415,8 @@ pub struct Style {
     pub audio: AudioStyle,
     /// Zoom level used for new automatic zooms.
     pub default_zoom: f64,
+    /// Loupe lens diameter as a fraction of the output height.
+    pub loupe_size: f64,
     pub device: DeviceFrame,
 }
 
@@ -437,6 +439,7 @@ impl Default for Style {
             captions: CaptionStyle::default(),
             audio: AudioStyle::default(),
             default_zoom: 2.0,
+            loupe_size: 0.35,
             device: DeviceFrame::None,
         }
     }
@@ -513,6 +516,8 @@ pub enum ZoomMode {
     Manual { target: Vec2 },
     /// Keep the live cursor in view.
     FollowMouse,
+    /// The screen stays at rest; a magnifier lens follows the cursor.
+    Loupe,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

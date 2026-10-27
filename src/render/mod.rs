@@ -36,6 +36,7 @@ const MODE_COMPOSITE: f32 = 5.0;
 const MODE_MASK: f32 = 6.0;
 const MODE_DIM: f32 = 7.0;
 const MODE_FILL: f32 = 8.0;
+const MODE_LOUPE: f32 = 9.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
@@ -590,6 +591,21 @@ impl Renderer {
             let mut d = Draw::new(MODE_COMPOSITE, full, size);
             d.p2 = [frame.backdrop_blur as f32, win.blur.velocity.x as f32, win.blur.velocity.y as f32, 0.0];
             d.p4 = [0.0, win.blur.zoom as f32, win.blur.zoom_center.x as f32, win.blur.zoom_center.y as f32];
+            main.push((d, TexId::Layer));
+        }
+
+        // Loupe magnifier over the window (under the cursor and click FX).
+        // It samples the composited window layer — masks and all — so it can
+        // never reveal detail a blur or pixelate mask covers.
+        if self.has_screen
+            && let Some(l) = &frame.loupe
+        {
+            let r = l.radius.max(1.0);
+            let shape = Rect::new(l.center.x - r, l.center.y - r, r * 2.0, r * 2.0);
+            let mut d = Draw::new(MODE_LOUPE, shape, size);
+            d.p0 = [r as f32, (size.y * 0.005).max(1.5) as f32, 0.0, l.alpha as f32];
+            let half = r / l.mag.max(1.0);
+            d.uv = r4(Rect::new((l.center.x - half) / size.x, (l.center.y - half) / size.y, half * 2.0 / size.x, half * 2.0 / size.y));
             main.push((d, TexId::Layer));
         }
 

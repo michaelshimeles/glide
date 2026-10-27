@@ -14,7 +14,7 @@ use super::sizes::Sizes;
 use super::spring::SpringConfig;
 use super::timemap::TimeMap;
 use super::zoom;
-use crate::project::model::{ClickEffect, Color, LayoutKind, MaskKind, Project, Shadow};
+use crate::project::model::{ClickEffect, Color, LayoutKind, MaskKind, Project, Shadow, ZoomMode};
 use crate::project::recording::Recording;
 
 /// Directional or radial blur for a moving layer.
@@ -107,6 +107,18 @@ pub struct TextLayer {
     pub badge: bool,
 }
 
+/// A magnifier lens tracking the cursor (a Loupe zoom range).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoupeLayer {
+    /// Lens centre in output px.
+    pub center: Vec2,
+    /// Lens radius in output px.
+    pub radius: f64,
+    /// Magnification: screen content under the lens at this scale.
+    pub mag: f64,
+    pub alpha: f64,
+}
+
 /// A region effect on the screen (blur, pixelate or highlight).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MaskLayer {
@@ -140,6 +152,7 @@ pub struct Frame {
     pub camera_full: Option<CameraLayer>,
     pub texts: Vec<TextLayer>,
     pub masks: Vec<MaskLayer>,
+    pub loupe: Option<LoupeLayer>,
     /// Device frame shapes around the window, back to front.
     pub device: Vec<super::device::Part>,
     /// The device body outline for the drop shadow.
@@ -154,6 +167,7 @@ struct Anim {
     bubble_vis: Animator,
     full: Animator,
     backdrop: Animator,
+    loupe: Animator,
     badges: HashMap<usize, Animator>,
 }
 
@@ -167,6 +181,7 @@ impl Anim {
             bubble_vis: Animator::new(fps),
             full: Animator::new(fps),
             backdrop: Animator::new(fps),
+            loupe: Animator::new(fps),
             badges: HashMap::new(),
         }
     }
@@ -259,6 +274,31 @@ impl Scene {
             let src = map.to_source(pb);
             let p = cm.target(src).unwrap_or_default();
             Target::new(vec![p.x, p.y, cm.tilt(src)], cm.spring(src))
+        })
+    }
+
+    /// Lens centre in recording px, magnification and visibility of the loupe.
+    /// Tracks the cursor whenever a Loupe zoom range is active and fades out
+    /// (keeping the cursor's position) when none is.
+    fn loupe_values(&mut self, f: i64) -> Vec<f64> {
+        let (map, sizes, tl, events) = (&self.map, &self.sizes, &self.project.timeline, &self.events);
+        let spring = self.project.style.screen_spring;
+        let cm = CursorModel {
+            events,
+            style: &self.project.style.cursor,
+            slices: &tl.slices,
+            source_start: map.source_start(),
+            source_end: map.source_end().min(self.duration),
+        };
+        self.anim.loupe.values_at(f, |pb| {
+            let src = map.to_source(pb);
+            let p = cm.target(src).unwrap_or(sizes.crop.center());
+            match zoom::active(&tl.zooms, src) {
+                Some(z) if matches!(z.mode, ZoomMode::Loupe) => {
+                    Target { values: vec![p.x, p.y, z.scale.max(1.0), 1.0], spring, snap: zoom::is_instant_edge(&tl.zooms, src) }
+                }
+                _ => Target { values: vec![p.x, p.y, 1.0, 0.0], spring, snap: zoom::is_instant_edge(&tl.zooms, src) },
+            }
         })
     }
 
@@ -558,6 +598,27 @@ impl Scene {
             })
             .collect();
 
+        // Loupe: a lens tracking the cursor while a Loupe zoom range is on.
+        let lv = self.loupe_values(f);
+        let loupe = if lv[3] > 0.002 {
+            let r = (style.loupe_size * size.y / 2.0).max(1.0);
+            // Lens centre in output px, kept inside the visible screen so the
+            // lens never floats over the background.
+            let keep = screen_rect.inset(r);
+            let c = self.screen_to_output(v2(lv[0], lv[1]), rect);
+            let center = if keep.size().x > 0.0 && keep.size().y > 0.0 {
+                v2(c.x.clamp(keep.min().x, keep.max().x), c.y.clamp(keep.min().y, keep.max().y))
+            } else {
+                screen_rect.center()
+            };
+            // The lens re-samples the composited window layer (masks applied),
+            // never the raw screen, so a magnified region can only show what
+            // the viewer already sees at 1x.
+            Some(LoupeLayer { center, radius: r, mag: lv[2], alpha: lv[3].clamp(0.0, 1.0) })
+        } else {
+            None
+        };
+
         Frame {
             size,
             playback_ms: pb,
@@ -571,6 +632,7 @@ impl Scene {
             camera_full: cam_full,
             texts,
             masks,
+            loupe,
             device: super::device::parts(style.device, rect),
             device_body: super::device::body(style.device, rect),
         }
@@ -598,7 +660,7 @@ pub fn centre_crop(from: f64, to: f64) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::model::Zoom;
+    use crate::project::model::{Zoom, ZoomMode};
     use crate::project::recording::{MouseEvent, MouseKind, RecordingMeta, VideoTrack};
 
     fn recording() -> Recording {
@@ -652,5 +714,42 @@ mod tests {
         let f = s.frame(1000.0, 1080.0);
         let c = f.cursor.unwrap();
         assert!(f.window.rect.contains(c.pos), "{:?} in {:?}", c.pos, f.window.rect);
+    }
+
+    #[test]
+    fn loupe_shows_lens_without_moving_the_window() {
+        let rec = recording();
+        let mut p = Project::default();
+        p.timeline.zooms.push(Zoom { start: 2500.0, end: 6000.0, scale: 2.5, mode: ZoomMode::Loupe, ..Default::default() });
+        let mut s = Scene::new(p, &rec, 60.0);
+        let during = s.frame(5000.0, 1080.0);
+        let l = during.loupe.expect("loupe inside its range");
+        // The window stays at rest: a loupe never scales the screen.
+        assert!(during.window.rect.w <= s.frame(1000.0, 1080.0).window.rect.w * 1.01, "screen does not zoom");
+        // The lens tracks the cursor at the range's magnification.
+        let c = during.cursor.unwrap();
+        assert!((l.center - c.pos).length() < l.radius, "lens follows the cursor");
+        assert!((l.mag - 2.5).abs() < 0.01, "magnification is the range's scale");
+        // Past the range the lens fades out.
+        assert!(s.frame(9000.0, 1080.0).loupe.is_none());
+    }
+
+    #[test]
+    fn loupe_stays_inside_the_screen_on_a_narrow_crop() {
+        let mut rec = recording();
+        rec.meta.screen.width = 1920;
+        rec.meta.screen.height = 1080;
+        let mut p = Project::default();
+        // A crop far narrower than the lens's magnified source extent.
+        p.style.crop = Rect::new(0.45, 0.0, 0.1, 1.0);
+        p.timeline.zooms.push(Zoom { start: 2500.0, end: 6000.0, scale: 1.5, mode: ZoomMode::Loupe, ..Default::default() });
+        let mut s = Scene::new(p, &rec, 60.0);
+        let f = s.frame(5000.0, 1080.0);
+        let l = f.loupe.expect("loupe inside its range");
+        // The lens keeps inside the visible screen even when the crop is thin.
+        let screen = f.window.rect.inset(f.window.inset);
+        let shrunk = screen.inset(l.radius);
+        let keep = if shrunk.size().x > 0.0 && shrunk.size().y > 0.0 { shrunk } else { screen };
+        assert!(keep.contains(l.center), "{:?} in {:?}", l.center, keep);
     }
 }

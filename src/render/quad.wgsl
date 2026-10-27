@@ -454,6 +454,28 @@ fn mode_mask(local: vec2<f32>) -> vec4<f32> {
     return vec4<f32>(c.rgb, 1.0) * cov * d.p0.w;
 }
 
+// Magnifier lens: the screen sampled through the (already magnified) source
+// rect d.uv, clipped to a disc. p0 = (radius px, rim width px, unused, alpha).
+fn mode_loupe(local: vec2<f32>) -> vec4<f32> {
+    let half = d.shape.zw * 0.5;
+    let centre = d.shape.xy + half;
+    let rel = local - centre;
+    let dist = length(rel) - d.p0.x;
+    let cov = coverage(dist);
+    if cov <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    var c = textureSample(tex, samp, rect_uv(local));
+    // Rim ring of p0.y px, lightened toward white.
+    let rim = smoothstep(-max(d.p0.y, 1.0), 0.0, dist);
+    c = vec4<f32>(mix(c.rgb, vec3<f32>(0.97, 0.97, 1.0), rim * 0.4), c.a);
+    // Glass sheen: a soft brightening toward the top-left, under the rim.
+    let g = rel / max(d.p0.x, 1.0);
+    let sheen = smoothstep(0.0, 1.0, -(g.x + g.y) * 0.5) * (1.0 - rim) * 0.08;
+    c = vec4<f32>(c.rgb + vec3<f32>(sheen), c.a);
+    return vec4<f32>(c.rgb, 1.0) * cov * d.p0.w;
+}
+
 // Dim the screen outside a rounded rect (spotlight). p3 = screen rect,
 // p0 = (hole radius, screen radius, feather px, opacity).
 fn mode_dim(local: vec2<f32>) -> vec4<f32> {
@@ -497,6 +519,7 @@ fn fs(i: VsOut) -> @location(0) vec4<f32> {
         case 5u: { return mode_composite(i.local); }
         case 6u: { return mode_mask(i.local); }
         case 7u: { return mode_dim(i.local); }
+        case 9u: { return mode_loupe(i.local); }
         case 8u: { return mode_fill(i.local); }
         default: { return mode_texture(i.local); }
     }

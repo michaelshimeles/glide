@@ -624,11 +624,13 @@ fn zoom_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
             ZoomMode::Auto => 0,
             ZoomMode::Manual { .. } => 1,
             ZoomMode::FollowMouse => 2,
+            ZoomMode::Loupe => 3,
         };
-        if segmented(ui, &mut mode, &[(0, "Auto"), (1, "Manual"), (2, "Follow mouse")]) {
+        if segmented(ui, &mut mode, &[(0, "Auto"), (1, "Manual"), (2, "Follow mouse"), (3, "Loupe")]) {
             z.mode = match mode {
                 1 => ZoomMode::Manual { target: v2(0.5, 0.5) },
                 2 => ZoomMode::FollowMouse,
+                3 => ZoomMode::Loupe,
                 _ => ZoomMode::Auto,
             };
         }

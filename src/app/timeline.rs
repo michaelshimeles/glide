@@ -226,6 +226,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                 ZoomMode::Auto => "Auto",
                 ZoomMode::Manual { .. } => "Manual",
                 ZoomMode::FollowMouse => "Follow",
+                ZoomMode::Loupe => "Loupe",
             };
             if r.width() > 40.0 {
                 painter.text(r.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, format!("{:.1}× {mode}", z.scale), theme::semibold(11.0), Color32::WHITE);
