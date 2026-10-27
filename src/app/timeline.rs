@@ -6,7 +6,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2,
 
 use super::editor::{Editor, Selection};
 use super::theme::{self, pal};
-use crate::project::model::{LayoutKind, Mask, MaskKind, Zoom, ZoomMode};
+use crate::project::model::{Annotation, LayoutKind, Mask, MaskKind, Zoom, ZoomMode};
 
 const RULER_H: f32 = 18.0;
 const TRACK_H: f32 = 40.0;
@@ -38,6 +38,7 @@ enum Drag {
     Zoom { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
     Layout { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
     Mask { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
+    Annotation { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
     Playhead,
 }
 
@@ -59,6 +60,9 @@ fn layout_color() -> Color32 {
 }
 fn mask_color() -> Color32 {
     Color32::from_rgb(0xec, 0x48, 0x99)
+}
+fn annotation_color() -> Color32 {
+    Color32::from_rgb(0x0e, 0xa5, 0xe9)
 }
 
 /// `v.clamp(lo, hi)`, or `keep` when the range is empty (an item already
@@ -96,7 +100,7 @@ pub fn empty(ui: &mut Ui) {
             ui.label(RichText::new("0:00.0 / 0:00.0").monospace());
             let _ = ui.selectable_label(false, "Loop");
             ui.separator();
-            for label in ["✂ Split", "+ Zoom", "+ Mask", "Delete"] {
+            for label in ["✂ Split", "+ Zoom", "+ Mask", "+ Note", "Delete"] {
                 let _ = ui.button(label);
             }
         });
@@ -119,7 +123,7 @@ pub fn empty(ui: &mut Ui) {
 pub fn ui(ui: &mut Ui, ed: &mut Editor) {
     let p = pal(ui);
     let has_cam = ed.rec.meta.camera.is_some();
-    let tracks = if has_cam { 4 } else { 3 };
+    let tracks = if has_cam { 5 } else { 4 };
     let warns = warnings(ed);
     let extra = if warns.is_empty() { 0.0 } else { WARN_H + GAP };
     let height = RULER_H + tracks as f32 * (TRACK_H + GAP) + 4.0 + extra;
@@ -152,9 +156,10 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
         let clip_row = track(0);
         let zoom_row = track(1);
         let mask_row = track(2);
-        let layout_row = track(3);
+        let ann_row = track(3);
+        let layout_row = track(4);
         let track_bg = if ui.visuals().dark_mode { Color32::from_white_alpha(8) } else { Color32::from_black_alpha(8) };
-        for r in [clip_row, zoom_row, mask_row].into_iter().chain(has_cam.then_some(layout_row)) {
+        for r in [clip_row, zoom_row, mask_row, ann_row].into_iter().chain(has_cam.then_some(layout_row)) {
             painter.rect_filled(r, CornerRadius::same(6), track_bg);
         }
 
@@ -364,6 +369,64 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             ed.selection = Selection::Mask(new_id);
         }
 
+        // Annotation track.
+        let annotations = ed.project.timeline.annotations.clone();
+        for a in &annotations {
+            let (a0, b0) = (map.to_playback_nearest(a.start), map.to_playback_nearest(a.end));
+            if b0 <= a0 {
+                continue;
+            }
+            let r = Rect::from_min_max(pos2(x_of(a0) + 1.0, ann_row.top()), pos2(x_of(b0) - 1.0, ann_row.bottom()));
+            let selected = ed.selection == Selection::Annotation(a.id);
+            painter.rect_filled(r, CornerRadius::same(6), annotation_color().gamma_multiply(if selected { 0.95 } else { 0.7 }));
+            if selected {
+                painter.rect_stroke(r, CornerRadius::same(6), Stroke::new(2.0, Color32::WHITE), egui::StrokeKind::Inside);
+            }
+            if r.width() > 40.0 {
+                let label = if a.text.is_empty() { "Note".to_string() } else { a.text.clone() };
+                painter.text(r.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, label, theme::semibold(11.0), Color32::WHITE);
+            }
+            if let Some(pos) = pointer
+                && r.expand(2.0).contains(pos)
+            {
+                let part = if (pos.x - r.left()).abs() < EDGE {
+                    Part::Left
+                } else if (pos.x - r.right()).abs() < EDGE {
+                    Part::Right
+                } else {
+                    Part::Body
+                };
+                if part != Part::Body {
+                    hover_cursor = Some(egui::CursorIcon::ResizeHorizontal);
+                }
+                if bg.drag_started() && drag.is_none() {
+                    drag = Some(Drag::Annotation { id: a.id, part, grab_src: map.to_source(pb_of(pos.x)), orig: (a.start, a.end) });
+                    ed.selection = Selection::Annotation(a.id);
+                } else if bg.clicked() {
+                    ed.selection = Selection::Annotation(a.id);
+                }
+            }
+        }
+        // Double-click empty annotation track to add a note there.
+        if bg.double_clicked()
+            && let Some(pos) = pointer
+            && ann_row.contains(pos)
+            && !annotations.iter().any(|a| {
+                let (a0, b0) = (map.to_playback_nearest(a.start), map.to_playback_nearest(a.end));
+                pos.x >= x_of(a0) && pos.x <= x_of(b0)
+            })
+        {
+            let src = map.to_source(pb_of(pos.x));
+            let end_limit = ed.rec.meta.duration_ms;
+            let mut new_id = 0;
+            ed.edit(|p| {
+                let id = p.timeline.new_id();
+                new_id = id;
+                p.timeline.annotations.push(Annotation { id, start: src, end: (src + 3000.0).min(end_limit), ..Default::default() });
+            });
+            ed.selection = Selection::Annotation(new_id);
+        }
+
         // Layout track.
         if has_cam {
             let layouts = ed.project.timeline.layouts.clone();
@@ -409,13 +472,13 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             && drag.is_none()
             && let Some(pos) = pointer
         {
-            let on_item = clip_row.contains(pos) || ((zoom_row.contains(pos) || mask_row.contains(pos)) && ed.selection != Selection::None);
+            let on_item = clip_row.contains(pos) || ((zoom_row.contains(pos) || mask_row.contains(pos) || ann_row.contains(pos)) && ed.selection != Selection::None);
             if ruler.contains(pos) || !on_item {
                 ed.seek(pb_of(pos.x));
                 if bg.drag_started() {
                     drag = Some(Drag::Playhead);
                 }
-                if !ruler.contains(pos) && bg.clicked() && !zoom_row.contains(pos) && !mask_row.contains(pos) && !clip_row.contains(pos) {
+                if !ruler.contains(pos) && bg.clicked() && !zoom_row.contains(pos) && !mask_row.contains(pos) && !ann_row.contains(pos) && !clip_row.contains(pos) {
                     ed.selection = Selection::None;
                 }
             }
@@ -497,6 +560,22 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                     }
                     ed.commit(draft);
                 }
+                Drag::Annotation { id, part, grab_src, orig } => {
+                    let delta = src - grab_src;
+                    let mut draft = ed.project.clone();
+                    if let Some(a) = draft.timeline.annotations.iter_mut().find(|a| a.id == id) {
+                        match part {
+                            Part::Body => {
+                                let len = orig.1 - orig.0;
+                                a.start = (orig.0 + delta).clamp(0.0, (dur_src - len).max(0.0));
+                                a.end = a.start + len;
+                            }
+                            Part::Left => a.start = clamp_or(orig.0 + delta, 0.0, orig.1 - Annotation::MIN_LEN_MS, orig.0),
+                            Part::Right => a.end = clamp_or(orig.1 + delta, orig.0 + Annotation::MIN_LEN_MS, dur_src, orig.1),
+                        }
+                    }
+                    ed.commit(draft);
+                }
             }
         }
         if bg.drag_stopped() {
@@ -515,7 +594,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
         }
 
         // Track labels and playhead.
-        for (r, name) in [(clip_row, "Clips"), (zoom_row, "Zoom"), (mask_row, "Masks")].into_iter().chain(has_cam.then_some((layout_row, "Camera"))) {
+        for (r, name) in [(clip_row, "Clips"), (zoom_row, "Zoom"), (mask_row, "Masks"), (ann_row, "Notes")].into_iter().chain(has_cam.then_some((layout_row, "Camera"))) {
             if map.links.is_empty() || name != "Clips" {
                 painter.text(r.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, name, egui::FontId::proportional(10.0), p.tertiary);
             }

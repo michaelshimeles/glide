@@ -155,6 +155,7 @@ struct Anim {
     full: Animator,
     backdrop: Animator,
     badges: HashMap<usize, Animator>,
+    annotations: HashMap<u64, Animator>,
 }
 
 impl Anim {
@@ -168,6 +169,7 @@ impl Anim {
             full: Animator::new(fps),
             backdrop: Animator::new(fps),
             badges: HashMap::new(),
+            annotations: HashMap::new(),
         }
     }
 }
@@ -558,6 +560,63 @@ impl Scene {
             })
             .collect();
 
+        // Annotations: a dot on the anchor plus a pill label that springs in
+        // like a key badge. The label sits above the anchor, flipping below
+        // when it would clip the top edge.
+        let annot_font = base_font * 0.55;
+        let annot_ids: Vec<u64> = self
+            .project
+            .timeline
+            .annotations
+            .iter()
+            .filter(|a| src >= a.start - 600.0 && src <= a.end + 1500.0)
+            .map(|a| a.id)
+            .collect();
+        for id in annot_ids {
+            let Some(a) = self.project.timeline.annotations.iter().find(|a| a.id == id) else { continue };
+            let rec_pt = v2(a.pos.x * rec.x, a.pos.y * rec.y);
+            if !self.sizes.crop.contains(rec_pt) {
+                continue;
+            }
+            let anchor = self.screen_to_output(rec_pt, rect);
+            let map = self.map.clone();
+            let anim = self.anim.annotations.entry(id).or_insert_with(|| Animator::new(self.fps));
+            let lift = annot_font * 0.6;
+            let (start, end) = (a.start, a.end);
+            let v = anim.values_at(f, |pb| {
+                let s = map.to_source(pb);
+                let vals = if s < start {
+                    vec![0.0, lift, 6.0]
+                } else if s <= end {
+                    vec![1.0, 0.0, 0.0]
+                } else {
+                    vec![0.0, -lift, 6.0]
+                };
+                Target::new(vals, SpringConfig::BADGE)
+            });
+            if v[0] <= 0.01 {
+                continue;
+            }
+            let dot_r = 4.5 * k;
+            circles.push(CircleFx { pos: anchor, radius: dot_r, alpha: v[0].clamp(0.0, 1.0), blur: 0.0 });
+            if !a.text.is_empty() {
+                let fs = fit_font(&a.text, annot_font, size.x * 0.5);
+                let half_w = (a.text.chars().count() as f64 * fs * 0.56 + fs) / 2.0;
+                let cx = anchor.x.clamp(half_w, (size.x - half_w).max(half_w));
+                let up = anchor.y - dot_r - fs * 1.1;
+                let cy = if up - fs * 1.1 > 0.0 { up } else { anchor.y + dot_r + fs * 1.1 };
+                let cy = cy.clamp(fs * 1.1, (size.y - fs * 1.1).max(fs * 1.1));
+                texts.push(TextLayer {
+                    text: a.text.clone(),
+                    size: fs,
+                    center: v2(cx, cy + v[1]),
+                    alpha: v[0].clamp(0.0, 1.0),
+                    blur: v[2] * k,
+                    badge: true,
+                });
+            }
+        }
+
         Frame {
             size,
             playback_ms: pb,
@@ -598,7 +657,7 @@ pub fn centre_crop(from: f64, to: f64) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::model::Zoom;
+    use crate::project::model::{Zoom, ZoomMode};
     use crate::project::recording::{MouseEvent, MouseKind, RecordingMeta, VideoTrack};
 
     fn recording() -> Recording {
@@ -652,5 +711,57 @@ mod tests {
         let f = s.frame(1000.0, 1080.0);
         let c = f.cursor.unwrap();
         assert!(f.window.rect.contains(c.pos), "{:?} in {:?}", c.pos, f.window.rect);
+    }
+
+    #[test]
+    fn annotation_shows_dot_and_label_over_its_range() {
+        use crate::project::model::Annotation;
+        let rec = recording();
+        let mut p = Project::default();
+        p.timeline.annotations.push(Annotation { id: 7, start: 2000.0, end: 6000.0, pos: v2(0.3, 0.5), text: "Click here".into() });
+        let mut s = Scene::new(p, &rec, 60.0);
+
+        let f = s.frame(4500.0, 1080.0);
+        let anchor = s.screen_to_output(v2(0.3 * 1920.0, 0.5 * 1080.0), f.window.rect);
+        let dot = f.circles.iter().find(|c| (c.pos - anchor).length() < 1.0).expect("anchor dot at the note position");
+        assert!(dot.alpha > 0.9, "{dot:?}");
+        let label = f.texts.iter().find(|t| t.text == "Click here").expect("note label");
+        assert!(label.badge, "notes draw as pills");
+        assert!(label.alpha > 0.9, "{label:?}");
+        assert!(label.center.y < anchor.y, "label above the anchor");
+
+        let after = s.frame(8000.0, 1080.0);
+        assert!(!after.texts.iter().any(|t| t.text == "Click here"), "label gone after the range");
+        assert!(!after.circles.iter().any(|c| (c.pos - anchor).length() < 1.0), "dot gone after the range");
+    }
+
+    #[test]
+    fn annotation_label_flips_below_near_the_top() {
+        use crate::project::model::Annotation;
+        let rec = recording();
+        let mut p = Project::default();
+        // A zoom focused near the bottom pushes a top anchor above the output
+        // top, so the label has to sit below the dot instead.
+        p.timeline.zooms.push(Zoom { id: 9, start: 1000.0, end: 9000.0, scale: 3.0, mode: ZoomMode::Manual { target: v2(0.5, 0.95) }, ..Default::default() });
+        p.timeline.annotations.push(Annotation { id: 7, start: 1000.0, end: 9000.0, pos: v2(0.5, 0.02), text: "Top edge".into() });
+        let mut s = Scene::new(p, &rec, 60.0);
+        let f = s.frame(4000.0, 1080.0);
+        let anchor = s.screen_to_output(v2(0.5 * 1920.0, 0.02 * 1080.0), f.window.rect);
+        assert!(anchor.y < 0.0, "anchor pushed above the viewport by the zoom");
+        let label = f.texts.iter().find(|t| t.text == "Top edge").expect("note label");
+        assert!(label.center.y > anchor.y, "label below the anchor when the top would clip");
+    }
+
+    #[test]
+    fn annotation_without_text_shows_only_the_dot() {
+        use crate::project::model::Annotation;
+        let rec = recording();
+        let mut p = Project::default();
+        p.timeline.annotations.push(Annotation { id: 7, start: 0.0, end: 10_000.0, pos: v2(0.5, 0.5), text: String::new() });
+        let mut s = Scene::new(p, &rec, 60.0);
+        let f = s.frame(4000.0, 1080.0);
+        let anchor = s.screen_to_output(v2(0.5 * 1920.0, 0.5 * 1080.0), f.window.rect);
+        assert!(f.circles.iter().any(|c| (c.pos - anchor).length() < 1.0), "dot present");
+        assert!(f.texts.is_empty(), "no empty pill");
     }
 }

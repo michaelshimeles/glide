@@ -54,6 +54,7 @@ pub fn render(shot: &Shot, out_file: &Path) -> Result<()> {
         ed.selection = match shot.select.as_deref() {
             Some("zoom") => tl.zooms.first().map_or(Selection::None, |z| Selection::Zoom(z.id)),
             Some("mask") => tl.masks.first().map_or(Selection::None, |m| Selection::Mask(m.id)),
+            Some("annotation") => tl.annotations.first().map_or(Selection::None, |a| Selection::Annotation(a.id)),
             Some("slice") => tl.slices.first().map_or(Selection::None, |s| Selection::Slice(s.id)),
             _ => Selection::None,
         };

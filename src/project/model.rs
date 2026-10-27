@@ -639,6 +639,41 @@ impl Mask {
     }
 }
 
+/// A text callout anchored to a point on the recording, shown as a dot with
+/// a pill label over a time range.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Annotation {
+    pub id: u64,
+    pub start: f64,
+    pub end: f64,
+    /// Anchor point normalised to the recording (0..1, top-left origin).
+    pub pos: Vec2,
+    pub text: String,
+}
+
+impl Default for Annotation {
+    fn default() -> Self {
+        Annotation { id: 0, start: 0.0, end: 0.0, pos: v2(0.5, 0.5), text: String::new() }
+    }
+}
+
+impl Annotation {
+    pub const MIN_LEN_MS: f64 = 300.0;
+    const FADE_MS: f64 = 150.0;
+
+    /// Smooth in/out fade, same shape as `Mask::alpha_at`.
+    pub fn alpha_at(&self, t: f64, duration: f64) -> f64 {
+        if t < self.start || t > self.end {
+            return 0.0;
+        }
+        let from_start = if self.start <= 1.0 { f64::INFINITY } else { t - self.start };
+        let to_end = if self.end >= duration - 1.0 { f64::INFINITY } else { self.end - t };
+        let edge = (from_start.min(to_end) / Self::FADE_MS).clamp(0.0, 1.0);
+        edge * edge * (3.0 - 2.0 * edge)
+    }
+}
+
 /// Narration recorded in the editor, played at normal speed from a point on
 /// the timeline.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -666,6 +701,7 @@ pub struct Timeline {
     pub zooms: Vec<Zoom>,
     pub layouts: Vec<LayoutRange>,
     pub masks: Vec<Mask>,
+    pub annotations: Vec<Annotation>,
     pub voiceovers: Vec<VoiceOver>,
     next_id: u64,
 }

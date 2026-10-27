@@ -27,6 +27,7 @@ pub enum Selection {
     Zoom(u64),
     Layout(u64),
     Mask(u64),
+    Annotation(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -263,6 +264,7 @@ impl Editor {
             Selection::Zoom(id) => tl.zooms.iter().any(|z| z.id == id),
             Selection::Layout(id) => tl.layouts.iter().any(|l| l.id == id),
             Selection::Mask(id) => tl.masks.iter().any(|m| m.id == id),
+            Selection::Annotation(id) => tl.annotations.iter().any(|a| a.id == id),
         };
         if !exists {
             self.selection = Selection::None;
@@ -387,6 +389,7 @@ impl Editor {
             Selection::Zoom(id) => p.timeline.zooms.retain(|z| z.id != id),
             Selection::Layout(id) => p.timeline.layouts.retain(|l| l.id != id),
             Selection::Mask(id) => p.timeline.masks.retain(|m| m.id != id),
+            Selection::Annotation(id) => p.timeline.annotations.retain(|a| a.id != id),
             Selection::None => {}
         });
         self.selection = Selection::None;
@@ -462,6 +465,20 @@ impl Editor {
             p.timeline.masks.push(crate::project::model::Mask { id, start, end, ..Default::default() });
         });
         self.selection = Selection::Mask(new_id);
+    }
+
+    pub fn add_annotation(&mut self) {
+        let src = self.source_at_playhead();
+        let end_limit = self.rec.meta.duration_ms;
+        let mut new_id = 0;
+        self.edit(|p| {
+            let id = p.timeline.new_id();
+            new_id = id;
+            let start = src.max(0.0);
+            let end = (start + 3000.0).min(end_limit);
+            p.timeline.annotations.push(crate::project::model::Annotation { id, start, end, ..Default::default() });
+        });
+        self.selection = Selection::Annotation(new_id);
     }
 
     /// Preview point (egui) → normalised recording coordinates, using the
@@ -675,6 +692,9 @@ impl Editor {
         if !cmd && pressed(egui::Key::M) {
             self.add_mask();
         }
+        if !cmd && pressed(egui::Key::N) {
+            self.add_annotation();
+        }
         if !cmd && pressed(egui::Key::L) {
             self.looping = !self.looping;
         }
@@ -854,6 +874,14 @@ impl Editor {
                 } else if resp.clicked() {
                     if let (Selection::Zoom(id), Some(pos)) = (self.selection, resp.interact_pointer_pos()) {
                         self.pick_zoom_target(id, (pos - rect.min) / rect.size());
+                    } else if let (Selection::Annotation(id), Some(pos)) = (self.selection, resp.interact_pointer_pos()) {
+                        if let Some(rec_pt) = self.preview_to_recording(rect, pos) {
+                            self.edit(|p| {
+                                if let Some(a) = p.timeline.annotations.iter_mut().find(|a| a.id == id) {
+                                    a.pos = rec_pt;
+                                }
+                            });
+                        }
                     } else {
                         self.toggle_play();
                     }
@@ -930,6 +958,9 @@ impl Editor {
             }
             if ui.button("+ Mask").on_hover_text("Blur, pixelate or highlight a region (M)").clicked() {
                 self.add_mask();
+            }
+            if ui.button("+ Note").on_hover_text("Anchor a text note to a point (N)").clicked() {
+                self.add_annotation();
             }
             if self.rec.meta.camera.is_some() && ui.button("+ Layout").clicked() {
                 let src = self.source_at_playhead();

@@ -27,6 +27,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             Selection::Slice(id) => slice_panel(ui, &mut draft, id),
             Selection::Layout(id) => layout_panel(ui, &mut draft, id),
             Selection::Mask(id) => mask_panel(ui, ed, &mut draft, id),
+            Selection::Annotation(id) => annotation_panel(ui, ed, &mut draft, id),
             Selection::None => {
                 tabs(ui, &mut ed.tab);
                 match ed.tab {
@@ -720,6 +721,33 @@ fn mask_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
     });
     if delete {
         d.timeline.masks.retain(|m| m.id != id);
+        ed.selection = Selection::None;
+    }
+}
+
+fn annotation_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
+    let Some(a) = d.timeline.annotations.iter_mut().find(|a| a.id == id) else { return };
+    let mut delete = false;
+    section(ui, "Note", |ui| {
+        ui.label("Text");
+        ui.text_edit_singleline(&mut a.text);
+        caption(ui, "Click the preview to place the dot; the label sits above it.");
+        egui::CollapsingHeader::new("Position").show(ui, |ui| {
+            slider(ui, "Left", &mut a.pos.x, 0.0..=1.0, "");
+            slider(ui, "Top", &mut a.pos.y, 0.0..=1.0, "");
+        });
+        caption(ui, &format!("{} – {}", widgets::fmt_time(a.start), widgets::fmt_time(a.end)));
+        ui.horizontal(|ui| {
+            if ui.button("Delete note").clicked() {
+                delete = true;
+            }
+            if ui.button("Done").clicked() {
+                ed.selection = Selection::None;
+            }
+        });
+    });
+    if delete {
+        d.timeline.annotations.retain(|a| a.id != id);
         ed.selection = Selection::None;
     }
 }
