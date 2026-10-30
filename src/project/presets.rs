@@ -1,5 +1,5 @@
 //! Style presets: a project's `Style` saved by name to
-//! `~/Library/Application Support/Glide/presets/<name>.json`, applied to any
+//! `~/Library/Application Support/DaisyCap/presets/<name>.json`, applied to any
 //! project, and optionally used as the default for new recordings.
 
 use std::path::{Path, PathBuf};
@@ -11,7 +11,7 @@ use super::{read_json, write_json};
 
 pub fn dir() -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join("Library/Application Support/Glide/presets")
+    home.join("Library/Application Support/DaisyCap/presets")
 }
 
 fn default_marker(dir: &Path) -> PathBuf {
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn save_list_default_and_delete() {
-        let dir = std::env::temp_dir().join(format!("glide-presets-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("daisycap-presets-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut style = Style::default();
         style.padding = 12.5;

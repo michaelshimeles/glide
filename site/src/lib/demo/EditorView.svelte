@@ -21,7 +21,7 @@
 		sheet: { shown: number; progress: number | null; done: boolean };
 	};
 
-	/** Glide's editor (`editor.rs`) playing back the recording from the first chapter. */
+	/** DaisyCap's editor (`editor.rs`) playing back the recording from the first chapter. */
 	let { r, playing, tab, smoothing, wallpaper, padding, roundness, zooms, pressed, sheet }: Props = $props();
 
 	let raw = $derived(smoothing === 'Off');

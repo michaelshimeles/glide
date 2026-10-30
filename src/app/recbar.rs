@@ -1,5 +1,5 @@
 //! The floating recording control bar: a borderless, non-activating panel
-//! (clicking it never brings Glide forward, so the menu bar being recorded
+//! (clicking it never brings DaisyCap forward, so the menu bar being recorded
 //! doesn't change) shaped as a pill with a vibrancy background, a pulsing
 //! dot, a monospaced timer and SF Symbol buttons. Native AppKit, so it
 //! looks and behaves like a system control; it's left out of recordings.
@@ -149,8 +149,8 @@ impl RecordBar {
             panel.setHasShadow(true);
             panel.setMovableByWindowBackground(true);
             // Never in screenshots or recordings (the recorder also leaves out
-            // Glide's own windows). The selftest's screenshots need it visible.
-            if std::env::var_os("GLIDE_SELFTEST_SHOTS").is_none() {
+            // DaisyCap's own windows). The selftest's screenshots need it visible.
+            if std::env::var_os("GIMBAL_SELFTEST_SHOTS").is_none() {
                 panel.setSharingType(NSWindowSharingType::None);
             }
             panel.setCollectionBehavior(

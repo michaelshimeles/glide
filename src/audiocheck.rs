@@ -2,7 +2,7 @@
 //! in 50 ms blocks so silence before and after doesn't hide it. A block has
 //! the tone when that frequency stands well above its neighbours, so music
 //! or speech playing at the same time (louder, even) doesn't either. Used by
-//! `glide audio-check` and the self-tests.
+//! `daisycap audio-check` and the self-tests.
 
 use crate::capture::mixer::RATE;
 use crate::export::audio::Stereo;

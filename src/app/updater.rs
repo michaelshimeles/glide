@@ -15,7 +15,7 @@ use objc2_foundation::{NSBundle, NSURL};
 
 use crate::util::ns;
 
-const LATEST_RELEASE: &str = "https://github.com/michaelshimeles/glide/releases/latest";
+const LATEST_RELEASE: &str = "https://github.com/michaelshimeles/daisycap/releases/latest";
 
 thread_local! {
     /// The `SPUStandardUpdaterController`, kept for the life of the app; `None` without Sparkle.
@@ -74,7 +74,7 @@ fn load() -> Option<Retained<AnyObject>> {
     Some(controller)
 }
 
-/// "Check for Updates…" under "About Glide" in the app menu. The controller is the item's target,
+/// "Check for Updates…" under "About DaisyCap" in the app menu. The controller is the item's target,
 /// so Sparkle also greys it out while a check is running.
 fn add_menu_item(mtm: MainThreadMarker, controller: &AnyObject) {
     let Some(app_menu) =

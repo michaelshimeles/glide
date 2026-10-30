@@ -2,4 +2,4 @@
 User-agent: *
 Disallow:
 
-Sitemap: https://glide.rasmic.xyz/sitemap.xml
+Sitemap: https://daisycap.rasmic.xyz/sitemap.xml

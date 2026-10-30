@@ -1,5 +1,5 @@
 //! The editable project: style, timeline edits and export settings.
-//! Stored as `project.json` inside a `.glide` package.
+//! Stored as `project.json` inside a `.daisycap` package.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -159,11 +159,11 @@ pub struct CursorStyle {
     pub base_rotation: f64,
     /// Hide after this long without movement.
     pub hide_idle_ms: Option<f64>,
-    /// Glide back to the starting position in the last N ms (seamless loops).
+    /// DaisyCap back to the starting position in the last N ms (seamless loops).
     pub loop_ms: Option<f64>,
     /// Freeze in the last N ms.
     pub freeze_ms: f64,
-    /// Glide onto upcoming click points this early, removing jitter.
+    /// DaisyCap onto upcoming click points this early, removing jitter.
     pub click_snap_ms: f64,
     pub click_effect: ClickEffect,
 }

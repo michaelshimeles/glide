@@ -1,5 +1,5 @@
 //! What the recorder captured: media files plus input events. Stored in the
-//! `recording/` folder of a `.glide` package and never modified by editing.
+//! `recording/` folder of a `.daisycap` package and never modified by editing.
 //!
 //! All positions are in screen-video pixels (top-left origin) and all times
 //! are milliseconds since the start of the recording, with pauses removed.

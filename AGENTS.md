@@ -1,6 +1,6 @@
 # Agent workflow
 
-This repo holds Glide, a native macOS screen recorder written in Rust, and its download page in `site/`. Pick the parts of this workflow that fit the task. The workflow and its skills come from [michaelshimeles/skills](https://github.com/michaelshimeles/skills).
+This repo holds DaisyCap, a native macOS screen recorder written in Rust, and its download page in `site/`. Pick the parts of this workflow that fit the task. The workflow and its skills come from [michaelshimeles/skills](https://github.com/michaelshimeles/skills).
 
 - Read-only reviews, explanations and investigations need no worktree or commit. If an investigation turns into edits, isolate those edits.
 - Code and copy changes get isolation, the checks below, and evidence of what changed. For a bug, capture the failure before fixing it.
@@ -9,7 +9,7 @@ This repo holds Glide, a native macOS screen recorder written in Rust, and its d
 
 ## Workflow
 
-1. **Isolate.** Use `/new-feature` before editing, and branch from `origin/main`. Micky's main checkout at `/Users/Shared/projects/screenstudio-rs` is synced to four other machines with Mutagen, so don't add worktrees, `node_modules` or build output there. Work in a fresh clone at `~/Desktop/glide-worktrees/<task-name>` on a branch named `agent/<task-name>`, and run `npm install` in its `site/` before site checks.
+1. **Isolate.** Use `/new-feature` before editing, and branch from `origin/main`. Micky's main checkout at `/Users/Shared/projects/screenstudio-rs` is synced to four other machines with Mutagen, so don't add worktrees, `node_modules` or build output there. Work in a fresh clone at `~/Desktop/daisycap-worktrees/<task-name>` on a branch named `agent/<task-name>`, and run `npm install` in its `site/` before site checks.
 2. **Build.** Follow the layout in the README. The app lives in `src/`, with the frame model in `src/engine`, and the download page lives in `site/`. Reach for `/code-structure` when the same operational logic shows up in more than one flow.
 3. **Prove.** Run the checks below for the part you changed. Use `/evidence-driven-testing` when behavior changes. For visible site changes, check desktop width and 390 px in light and dark, and keep the screenshots.
 4. **Ship.** Open a PR against `main`. Add a before and after table from `/before-and-after` for visible changes, and run `/greploop` for code changes. Aim for 5/5 with no unresolved actionable findings on the current commit. Stop at the iteration cap, a review timeout or an unavailable integration, and report the real score and what's left.
@@ -17,8 +17,8 @@ This repo holds Glide, a native macOS screen recorder written in Rust, and its d
 ## Project rules
 
 - Commit messages follow the repo's style, `type(scope): lowercase summary`, such as `feat(app): ...`, `fix(audio): ...` or `docs: ...`.
-- Keep build output out of the repo. `scripts/env.sh` puts Cargo's target directory in `~/.cache/cargo-target/screenstudio-rs`, and test output goes to `~/Movies/glide-tests`.
-- Screenshots and demos come from Glide's synthetic recordings (`glide synth`), never from a real desktop.
+- Keep build output out of the repo. `scripts/env.sh` puts Cargo's target directory in `~/.cache/cargo-target/screenstudio-rs`, and test output goes to `~/Movies/daisycap-tests`.
+- Screenshots and demos come from DaisyCap's synthetic recordings (`daisycap synth`), never from a real desktop.
 - Don't deploy to Vercel, create Vercel projects, publish GitHub releases or push tags unless Micky asks.
 - The download page claims only what the app ships. Check a feature in `src/` before the page mentions it.
 - Keep Screen Studio's name out of the page's headline, logo and assets. It appears once, in the footer's not-affiliated note.

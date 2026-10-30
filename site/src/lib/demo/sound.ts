@@ -1,15 +1,15 @@
 /**
  * The demo's sound effects, synthesized with Web Audio so the page ships no audio files. Each
- * sound is a few short layers: tones with an optional pitch glide, and filtered noise bursts.
+ * sound is a few short layers: tones with an optional pitch daisycap, and filtered noise bursts.
  */
 
 type Tone = {
 	type: 'tone';
 	wave: OscillatorType;
 	freq: number;
-	/** Glide to this frequency over `glide` seconds. */
+	/** DaisyCap to this frequency over `daisycap` seconds. */
 	to?: number;
-	glide?: number;
+	daisycap?: number;
 };
 type Noise = {
 	type: 'noise';
@@ -40,7 +40,7 @@ const PATCHES: Record<Sound, Patch> = {
 	click: {
 		layers: [
 			{ type: 'noise', filter: 'bandpass', freq: 3200, q: 1.8, attack: 0.001, decay: 0.012, peak: 0.09 },
-			{ type: 'tone', wave: 'sine', freq: 1800, to: 1200, glide: 0.02, attack: 0.001, decay: 0.025, peak: 0.02 },
+			{ type: 'tone', wave: 'sine', freq: 1800, to: 1200, daisycap: 0.02, attack: 0.001, decay: 0.025, peak: 0.02 },
 			{ type: 'noise', filter: 'bandpass', freq: 2400, q: 2, at: 0.06, attack: 0.001, decay: 0.01, peak: 0.05 }
 		]
 	},
@@ -71,8 +71,8 @@ const PATCHES: Record<Sound, Patch> = {
 	},
 	enter: {
 		layers: [
-			{ type: 'tone', wave: 'sine', freq: 150, to: 90, glide: 0.08, attack: 0.002, decay: 0.1, peak: 0.12 },
-			{ type: 'tone', wave: 'triangle', freq: 587.33, to: 880, glide: 0.07, at: 0.01, attack: 0.004, decay: 0.2, peak: 0.045 },
+			{ type: 'tone', wave: 'sine', freq: 150, to: 90, daisycap: 0.08, attack: 0.002, decay: 0.1, peak: 0.12 },
+			{ type: 'tone', wave: 'triangle', freq: 587.33, to: 880, daisycap: 0.07, at: 0.01, attack: 0.004, decay: 0.2, peak: 0.045 },
 			{ type: 'tone', wave: 'sine', freq: 1174.66, at: 0.07, attack: 0.004, decay: 0.28, peak: 0.035 }
 		],
 		air: 0.2
@@ -80,7 +80,7 @@ const PATCHES: Record<Sound, Patch> = {
 	sweep: {
 		layers: [
 			{ type: 'noise', filter: 'bandpass', freq: 500, to: 5200, q: 1.2, attack: 0.03, decay: 0.5, peak: 0.05 },
-			{ type: 'tone', wave: 'sine', freq: 392, to: 784, glide: 0.4, attack: 0.02, decay: 0.45, peak: 0.018 }
+			{ type: 'tone', wave: 'sine', freq: 392, to: 784, daisycap: 0.4, attack: 0.02, decay: 0.45, peak: 0.018 }
 		],
 		air: 0.15
 	},
@@ -103,7 +103,7 @@ const PATCHES: Record<Sound, Patch> = {
 	},
 	pop: {
 		layers: [
-			{ type: 'tone', wave: 'sine', freq: 620, to: 1040, glide: 0.05, attack: 0.002, decay: 0.1, peak: 0.05 },
+			{ type: 'tone', wave: 'sine', freq: 620, to: 1040, daisycap: 0.05, attack: 0.002, decay: 0.1, peak: 0.05 },
 			{ type: 'noise', filter: 'bandpass', freq: 2000, q: 2, attack: 0.001, decay: 0.015, peak: 0.03 }
 		],
 		air: 0.12
@@ -188,7 +188,7 @@ function voice(ctx: AudioContext, out: AudioNode, layer: Layer, t0: number, pitc
 		const osc = ctx.createOscillator();
 		osc.type = layer.wave;
 		osc.frequency.setValueAtTime(layer.freq * pitch, t0);
-		if (layer.to) osc.frequency.exponentialRampToValueAtTime(layer.to * pitch, t0 + (layer.glide ?? layer.decay));
+		if (layer.to) osc.frequency.exponentialRampToValueAtTime(layer.to * pitch, t0 + (layer.daisycap ?? layer.decay));
 		osc.connect(env);
 		source = osc;
 	} else {

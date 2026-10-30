@@ -1,5 +1,5 @@
 <script lang="ts">
-	/** Glide's segmented control. `accent` fills the selected segment with blue, as in recording setup. */
+	/** DaisyCap's segmented control. `accent` fills the selected segment with blue, as in recording setup. */
 	let {
 		items,
 		selected,

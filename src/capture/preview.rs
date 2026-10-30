@@ -233,7 +233,7 @@ impl LivePreview {
     /// `on_frame` (from a capture queue) after each new frame. Screens are
     /// captured at their native pixel size and scaled to `set_target`, or
     /// with `max_px` > 0 captured at most that long edge and not rescaled;
-    /// cameras to at most `max_px` on the long edge. Glide's own windows are
+    /// cameras to at most `max_px` on the long edge. DaisyCap's own windows are
     /// left out. With `audio`, a screen preview also measures the system
     /// audio it would record (`level`).
     pub fn start(source: &Source, max_px: u32, fps: u32, audio: bool, on_frame: impl Fn() + Send + Sync + 'static) -> Result<LivePreview> {
@@ -308,7 +308,7 @@ impl LivePreview {
             let target = Arc::new(AtomicU64::new(0));
             let output = PreviewOutput::create(latest.clone(), level.clone(), target.clone(), max_px == 0, Box::new(on_frame));
             let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &conf, None);
-            let queue = DispatchQueue::new("glide.preview", None);
+            let queue = DispatchQueue::new("daisycap.preview", None);
             let proto: &ProtocolObject<dyn SCStreamOutput> = ProtocolObject::from_ref(&*output);
             stream
                 .addStreamOutput_type_sampleHandlerQueue_error(proto, SCStreamOutputType::Screen, Some(&queue))
@@ -354,7 +354,7 @@ impl LivePreview {
             let latest = Arc::new(Mutex::new(None));
             let target = Arc::new(AtomicU64::new(0));
             let output = PreviewOutput::create(latest.clone(), Arc::new(AtomicU32::new(0)), target.clone(), false, Box::new(on_frame));
-            let queue = DispatchQueue::new("glide.preview.camera", None);
+            let queue = DispatchQueue::new("daisycap.preview.camera", None);
             out.setSampleBufferDelegate_queue(Some(ProtocolObject::from_ref(&*output)), Some(&queue));
             if !session.canAddOutput(&out) {
                 bail!("cannot preview {name}");

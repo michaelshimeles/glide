@@ -30,7 +30,7 @@ impl VoiceRecorder {
         use crate::capture::tcc::{self, Status};
         match tcc::mic_status() {
             Status::Denied | Status::Restricted => {
-                bail!("Microphone access is off — enable Glide in System Settings › Privacy & Security › Microphone")
+                bail!("Microphone access is off — enable DaisyCap in System Settings › Privacy & Security › Microphone")
             }
             _ => {}
         }

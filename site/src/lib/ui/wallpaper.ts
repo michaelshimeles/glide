@@ -1,5 +1,5 @@
 /**
- * Glide's built-in wallpapers, ported from `src/render/art.rs`: soft colour blobs over a base
+ * DaisyCap's built-in wallpapers, ported from `src/render/art.rs`: soft colour blobs over a base
  * colour, crossed by three translucent glass ribbons with a bright rim. Painted on a canvas, so
  * the page ships no wallpaper images.
  */

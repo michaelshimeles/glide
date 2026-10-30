@@ -1,6 +1,6 @@
-# Glide download page
+# DaisyCap download page
 
-The download page for Glide, an open-source screen recorder for the Mac. One prerendered SvelteKit page plus a `/download` redirect, deployed on Vercel. Run the commands below from this folder.
+The download page for DaisyCap, an open-source screen recorder for the Mac. One prerendered SvelteKit page plus a `/download` redirect, deployed on Vercel. Run the commands below from this folder.
 
 ## Develop
 
@@ -16,26 +16,26 @@ npm run preview   # serves the build on http://localhost:4173
 
 ## Download link
 
-The Download button points at `/download`, which 302s to `https://github.com/michaelshimeles/glide/releases/latest/download/Glide.dmg`, the DMG that `scripts/release-macos.sh` builds. The URL, version number and system requirements all live in `src/lib/site.ts`.
+The Download button points at `/download`, which 302s to `https://github.com/michaelshimeles/daisycap/releases/latest/download/DaisyCap.dmg`, the DMG that `scripts/release-macos.sh` builds. The URL, version number and system requirements all live in `src/lib/site.ts`.
 
 ## Assets
 
-The icons in `src/lib/assets` and `static`, and `static/og.jpg`, come from `scripts/assets.sh`. The script reads the app from the repo root, so run `scripts/build.sh` there first, or point `GLIDE_REPO` at a checkout that already has a built `dist/Glide.app`. It never writes to the app's files.
+The icons in `src/lib/assets` and `static`, and `static/og.jpg`, come from `scripts/assets.sh`. The script reads the app from the repo root, so run `scripts/build.sh` there first, or point `GIMBAL_REPO` at a checkout that already has a built `dist/DaisyCap.app`. It never writes to the app's files.
 
 ```sh
 scripts/assets.sh
-GLIDE_REPO=~/src/glide scripts/assets.sh
+GIMBAL_REPO=~/src/daisycap scripts/assets.sh
 ```
 
-The Open Graph card is `scripts/og/og.html` rendered by headless Chrome, around a frame of Glide's own synthetic recording (`glide synth`) styled by `scripts/og/style.json`. You also need `cwebp` and ImageMagick (`brew install webp imagemagick`).
+The Open Graph card is `scripts/og/og.html` rendered by headless Chrome, around a frame of DaisyCap's own synthetic recording (`daisycap synth`) styled by `scripts/og/style.json`. You also need `cwebp` and ImageMagick (`brew install webp imagemagick`).
 
 ## Demo and cards
 
-The demo and the feature cards are HTML and CSS recreations of Glide's interface in `src/lib/demo`, `src/lib/cards` and `src/lib/ui`, so the page ships no video and shows no real desktop. The demo's timing, click targets, captions and sound cues live in `src/lib/demo/script.ts`. `src/lib/ui/recording.ts` replays the recording with the app's spring constants for zooms and cursor smoothing, so the motion matches what Glide renders.
+The demo and the feature cards are HTML and CSS recreations of DaisyCap's interface in `src/lib/demo`, `src/lib/cards` and `src/lib/ui`, so the page ships no video and shows no real desktop. The demo's timing, click targets, captions and sound cues live in `src/lib/demo/script.ts`. `src/lib/ui/recording.ts` replays the recording with the app's spring constants for zooms and cursor smoothing, so the motion matches what DaisyCap renders.
 
 ## Deploy
 
-Import the repo as a Vercel project with the SvelteKit preset and set the Root Directory to `site`. No environment variables are needed. The canonical, Open Graph and JSON-LD URLs are built from `origin` in `src/lib/site.ts`, so every build, including previews and local builds, points them at `https://glide.rasmic.xyz`. `static/robots.txt` and `static/sitemap.xml` spell out the same domain, so update them too if it changes.
+Import the repo as a Vercel project with the SvelteKit preset and set the Root Directory to `site`. No environment variables are needed. The canonical, Open Graph and JSON-LD URLs are built from `origin` in `src/lib/site.ts`, so every build, including previews and local builds, points them at `https://daisycap.rasmic.xyz`. `static/robots.txt` and `static/sitemap.xml` spell out the same domain, so update them too if it changes.
 
 ## Analytics
 

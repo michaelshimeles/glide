@@ -133,7 +133,7 @@ pub fn trash(path: &std::path::Path) {
     let url = objc2_foundation::NSURL::fileURLWithPath(&crate::util::ns(&path.to_string_lossy()));
     let fm = objc2_foundation::NSFileManager::defaultManager();
     if let Err(e) = fm.trashItemAtURL_resultingItemURL_error(&url, None) {
-        eprintln!("glide: couldn't trash {}: {}", path.display(), e.localizedDescription());
+        eprintln!("daisycap: couldn't trash {}: {}", path.display(), e.localizedDescription());
     }
 }
 
@@ -220,7 +220,7 @@ pub fn window_number(window: &Window) -> Option<isize> {
     ns_window(window).map(|w| w.windowNumber())
 }
 
-/// Called by AppKit when Finder opens documents with Glide (double-click,
+/// Called by AppKit when Finder opens documents with DaisyCap (double-click,
 /// Open With, drag onto the Dock icon), at launch or while running.
 extern "C-unwind" fn open_urls(_this: *mut objc2::runtime::AnyObject, _cmd: objc2::runtime::Sel, _app: *mut objc2::runtime::AnyObject, urls: *mut objc2_foundation::NSArray<objc2_foundation::NSURL>) {
     // SAFETY: AppKit passes a valid NSArray<NSURL> for this selector.
@@ -236,7 +236,7 @@ extern "C-unwind" fn open_urls(_this: *mut objc2::runtime::AnyObject, _cmd: objc
 }
 
 /// Teach the app delegate (winit's) `application:openURLs:` so Finder can
-/// open `.glide` projects. Call after the event loop exists, before it runs.
+/// open `.daisycap` projects. Call after the event loop exists, before it runs.
 pub fn install_open_handler() {
     use objc2::runtime::{AnyClass, Sel};
     let Some(mtm) = objc2::MainThreadMarker::new() else { return };

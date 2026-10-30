@@ -26,7 +26,7 @@ impl Gpu {
         }))
         .context("no Metal GPU adapter")?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("glide"),
+            label: Some("daisycap"),
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             ..Default::default()
         }))

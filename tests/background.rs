@@ -6,22 +6,22 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-use glide::app::editor::Editor;
-use glide::export::{self, Job, Source};
-use glide::project::model::{Aspect, Background, Color, ExportSettings, Quality, Style};
-use glide::render::bgcheck::{self, Region};
-use glide::render::{Gpu, Image};
+use daisycap::app::editor::Editor;
+use daisycap::export::{self, Job, Source};
+use daisycap::project::model::{Aspect, Background, Color, ExportSettings, Quality, Style};
+use daisycap::render::bgcheck::{self, Region};
+use daisycap::render::{Gpu, Image};
 
 const SIZE: (u32, u32) = (640, 400);
 
 /// A synthetic recording opened in the editor, with its auto zooms removed
 /// so the background stays in view.
 fn editor(name: &str) -> (PathBuf, Editor) {
-    let dir = std::env::temp_dir().join(format!("glide-bg-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("daisycap-bg-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("Background.glide");
-    glide::synth::write_package(&path, 1.0, 1280, 800).unwrap();
+    let path = dir.join("Background.daisycap");
+    daisycap::synth::write_package(&path, 1.0, 1280, 800).unwrap();
     let mut ed = Editor::open(&path, Gpu::headless().unwrap()).unwrap();
     let mut d = ed.project.clone();
     d.timeline.zooms.clear();
@@ -101,7 +101,7 @@ fn export_frame(ed: &Editor, dir: &Path, name: &str) -> Image {
     let output = dir.join(format!("{name}.mp4"));
     let job = Job { project: ed.project.clone(), recording: ed.rec.clone(), source: Source::Package(ed.package.root.clone()), settings, output: output.clone() };
     export::run(&job, &mut |_| {}, &AtomicBool::new(false)).unwrap();
-    let mut src = glide::media::FrameSource::open(&output).unwrap();
+    let mut src = daisycap::media::FrameSource::open(&output).unwrap();
     let frame = src.frame_at(0.0).unwrap();
     frame.with_bgra(|v| {
         let mut rgba = Vec::with_capacity((v.width * v.height * 4) as usize);

@@ -1,13 +1,13 @@
 #!/bin/sh
 # Measure recording overhead and export speed on this Mac; prints a Markdown
 # table body for PERFORMANCE.md. Usage: scripts/bench.sh [--no-screen]
-# Outputs go to $GLIDE_TEST_DIR (default ~/Movies/glide-tests)/bench.
+# Outputs go to $GIMBAL_TEST_DIR (default ~/Movies/daisycap-tests)/bench.
 set -eu
 cd "$(dirname "$0")/.."
 . scripts/env.sh
 cargo build --release -q
-G="$CARGO_TARGET_DIR/release/glide"
-OUT="${GLIDE_TEST_DIR:-$HOME/Movies/glide-tests}/bench"
+G="$CARGO_TARGET_DIR/release/daisycap"
+OUT="${GIMBAL_TEST_DIR:-$HOME/Movies/daisycap-tests}/bench"
 rm -rf "$OUT"; mkdir -p "$OUT"
 echo "# $(sysctl -n machdep.cpu.brand_string), $(sysctl -n hw.memsize | awk '{print $1/1073741824}') GB, macOS $(sw_vers -productVersion), $(date '+%Y-%m-%d %H:%M')"
 
@@ -28,10 +28,10 @@ fi
 # Export: video seconds per wall-clock second.
 exp() {
   src=$1; name=$2; shift 2
-  line=$("$G" export "$OUT/$src.glide" -o "$OUT/$name" "$@" 2>/dev/null)
+  line=$("$G" export "$OUT/$src.daisycap" -o "$OUT/$name" "$@" 2>/dev/null)
   echo "| export $src → $name $* | $(echo "$line" | sed 's/^[^:]*: //') |"
 }
-"$G" synth "$OUT/synth.glide" --duration 12 >/dev/null
+"$G" synth "$OUT/synth.daisycap" --duration 12 >/dev/null
 exp synth 1080p60-social.mp4 --height 1080 --fps 60 --quality social
 exp synth 1080p60-hevc.mp4 --height 1080 --fps 60 --codec hevc
 exp synth 720p30-web.mp4 --height 720 --fps 30 --quality web

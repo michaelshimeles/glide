@@ -120,7 +120,7 @@ pub fn check_permissions(o: &Options) -> Result<()> {
     }
     if !missing.is_empty() {
         bail!(
-            "missing permission(s): {}\n  run `glide permissions --request`, then enable Glide in System Settings > Privacy & Security",
+            "missing permission(s): {}\n  run `daisycap permissions --request`, then enable DaisyCap in System Settings > Privacy & Security",
             missing.join(", ")
         );
     }

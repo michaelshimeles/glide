@@ -66,7 +66,7 @@
 		overlay
 	}: Props = $props();
 
-	// Same geometry as Glide's `Sizes`: padding is a share of the window's average side.
+	// Same geometry as DaisyCap's `Sizes`: padding is a share of the window's average side.
 	let pad = $derived(Math.ceil(((SCREEN.w + SCREEN.h) / 2) * (padding / 100)));
 	let out = $derived({ w: SCREEN.w + 2 * pad, h: SCREEN.h + 2 * pad });
 	let fit = $derived(Math.min(width / out.w, height / out.h));

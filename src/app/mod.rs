@@ -1,4 +1,4 @@
-//! The Glide app: one main window (recording setup ↔ editor), a floating
+//! The DaisyCap app: one main window (recording setup ↔ editor), a floating
 //! recording control bar (native panel), a menu bar item and global
 //! shortcuts (default ⌥⇧⌘R). egui on wgpu with a transparent titlebar and
 //! Inter, sharing one GPU device with the editor's renderer.
@@ -152,7 +152,7 @@ impl<K: Clone + PartialEq + Send + 'static, V: Send + 'static> Slot<K, V> {
                 Ok(v) if Some(&k) == want.as_ref() && self.running.is_none() => self.running = Some((k, v)),
                 Ok(v) => drop(std::thread::spawn(move || drop(v))),
                 Err(e) => {
-                    eprintln!("glide: {name}: {e}");
+                    eprintln!("daisycap: {name}: {e}");
                     self.failed = Some((k, e));
                 }
             }
@@ -254,7 +254,7 @@ struct Recording {
 
 type Finished = Result<PathBuf, String>;
 
-/// Scripted run for `GLIDE_GUI_SELFTEST=1` (scripts/selftest.sh): record a
+/// Scripted run for `GIMBAL_GUI_SELFTEST=1` (scripts/selftest.sh): record a
 /// test pattern, stop, open it in the editor, export, check and quit. Never
 /// touches the mouse or needs permissions.
 struct SelfTest {
@@ -270,7 +270,7 @@ fn log(msg: &str) {
     eprintln!("selftest: {msg}");
 }
 
-/// Scripted playback check for `GLIDE_GUI_PLAYTEST=<package>`
+/// Scripted playback check for `GIMBAL_GUI_PLAYTEST=<package>`
 /// (scripts/selftest.sh): open the project and play it through the
 /// speakers (while the script records what the Mac plays), checking that
 /// the output follows the volume, mute and playhead. Logs `playtest:` lines
@@ -282,7 +282,7 @@ struct PlayTest {
     started: Instant,
     /// Seconds to play before changing anything.
     secs: f64,
-    /// Seconds to wait before opening the project (GLIDE_PLAYTEST_DELAY).
+    /// Seconds to wait before opening the project (GIMBAL_PLAYTEST_DELAY).
     delay: f64,
     max_drift: f64,
     loud_db: f32,
@@ -332,28 +332,28 @@ struct App {
 fn permission_note() -> Option<String> {
     use crate::capture::tcc::{self, Status};
     if tcc::screen_status() != Status::Granted {
-        return Some("Glide needs Screen Recording access. Request it, then enable Glide in System Settings › Privacy & Security › Screen & System Audio Recording, and reopen Glide.".into());
+        return Some("DaisyCap needs Screen Recording access. Request it, then enable DaisyCap in System Settings › Privacy & Security › Screen & System Audio Recording, and reopen DaisyCap.".into());
     }
     None
 }
 
 impl App {
     fn new(open: Option<PathBuf>) -> App {
-        let selftest = std::env::var_os("GLIDE_GUI_SELFTEST").map(|_| SelfTest { phase: 0, at: Instant::now(), paused_at: None, resumed: false, package: None });
-        let playtest = std::env::var_os("GLIDE_GUI_PLAYTEST").map(|p| PlayTest {
+        let selftest = std::env::var_os("GIMBAL_GUI_SELFTEST").map(|_| SelfTest { phase: 0, at: Instant::now(), paused_at: None, resumed: false, package: None });
+        let playtest = std::env::var_os("GIMBAL_GUI_PLAYTEST").map(|p| PlayTest {
             path: PathBuf::from(p),
             phase: 0,
             at: Instant::now(),
             started: Instant::now(),
-            secs: std::env::var("GLIDE_PLAYTEST_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0),
-            delay: std::env::var("GLIDE_PLAYTEST_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(0.5),
+            secs: std::env::var("GIMBAL_PLAYTEST_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0),
+            delay: std::env::var("GIMBAL_PLAYTEST_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(0.5),
             max_drift: 0.0,
             loud_db: 0.0,
             volume: 1.0,
         });
         let scripted = selftest.is_some() || playtest.is_some();
         let mut settings = if scripted { Settings::default() } else { Settings::load() };
-        if let Some(dir) = std::env::var_os("GLIDE_OUTPUT_DIR") {
+        if let Some(dir) = std::env::var_os("GIMBAL_OUTPUT_DIR") {
             settings.projects_dir = Some(PathBuf::from(dir));
         }
         if selftest.is_some() {
@@ -449,7 +449,7 @@ impl App {
                 }))
                 .expect("no compatible GPU adapter");
                 let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                    label: Some("glide"),
+                    label: Some("daisycap"),
                     required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
                     ..Default::default()
                 }))
@@ -502,7 +502,7 @@ impl App {
 
     fn show_main(&mut self, el: &ActiveEventLoop) {
         if self.main.is_none() {
-            let w = self.open_window(el, "Glide", (1320.0, 840.0), (980.0, 640.0));
+            let w = self.open_window(el, "DaisyCap", (1320.0, 840.0), (980.0, 640.0));
             self.main = Some(w);
         }
         if let Some(w) = &self.main {
@@ -549,7 +549,7 @@ impl App {
             match combo {
                 Some(c) => {
                     if let Err(code) = hotkey::bind(slot, c, move || push(cmd.clone())) {
-                        eprintln!("glide: could not register {} (error {code})", c.label());
+                        eprintln!("daisycap: could not register {} (error {code})", c.label());
                         failed.push(c.label());
                     }
                 }
@@ -566,9 +566,9 @@ impl App {
 
     fn recorder_options(&self) -> recorder::Options {
         let s = &self.settings;
-        // GLIDE_SELFTEST_REAL records the main display (to check what ends up
+        // GIMBAL_SELFTEST_REAL records the main display (to check what ends up
         // in a real recording, e.g. that the control bar doesn't).
-        if self.selftest.is_some() && std::env::var_os("GLIDE_SELFTEST_REAL").is_some() {
+        if self.selftest.is_some() && std::env::var_os("GIMBAL_SELFTEST_REAL").is_some() {
             return recorder::Options { target: Target::Display { id: 0 }, system_audio: false, mic: None, camera: None, fps: 60, keys: false, dir: s.dir(), name: Some("Selftest".into()), ..Default::default() };
         }
         if self.selftest.is_some() {
@@ -838,7 +838,7 @@ impl App {
         }
     }
 
-    /// Driven by GLIDE_GUI_SELFTEST or GLIDE_GUI_PLAYTEST: keep the user's
+    /// Driven by GIMBAL_GUI_SELFTEST or GIMBAL_GUI_PLAYTEST: keep the user's
     /// settings untouched and stay in the background.
     fn scripted(&self) -> bool {
         self.selftest.is_some() || self.playtest.is_some()
@@ -1035,7 +1035,7 @@ impl App {
                 };
                 let size = w.window.inner_size();
                 log(&format!("area picker open {}x{} px, {} displays covered", size.width, size.height, self.overlays.len()));
-                if let (Some(dir), Some(num)) = (std::env::var_os("GLIDE_SELFTEST_SHOTS"), macos::window_number(&w.window)) {
+                if let (Some(dir), Some(num)) = (std::env::var_os("GIMBAL_SELFTEST_SHOTS"), macos::window_number(&w.window)) {
                     let out = PathBuf::from(dir).join("area-picker.png");
                     let ok = std::process::Command::new("screencapture").args(["-x", "-o", "-l", &num.to_string()]).arg(&out).status().is_ok_and(|s| s.success());
                     log(&format!("area picker screenshot {} ok={ok}", out.display()));
@@ -1070,7 +1070,7 @@ impl App {
                     return;
                 }
                 log(&format!("window picker open on {} displays with {} windows, selected {:?}", self.overlays.len(), wm.list.len(), wm.selected));
-                if let Some(dir) = std::env::var_os("GLIDE_SELFTEST_SHOTS") {
+                if let Some(dir) = std::env::var_os("GIMBAL_SELFTEST_SHOTS") {
                     for o in &self.overlays {
                         let Some(num) = macos::window_number(&o.window) else { continue };
                         let out = PathBuf::from(&dir).join(format!("window-picker-{}.png", o.display));
@@ -1088,7 +1088,7 @@ impl App {
                     fail("window picker cancel".into());
                 }
                 // A real recording is of the main display; put the bar there too.
-                if std::env::var_os("GLIDE_SELFTEST_REAL").is_some() {
+                if std::env::var_os("GIMBAL_SELFTEST_REAL").is_some() {
                     self.settings.source = SourceKind::Display;
                     self.settings.display = 0;
                 }
@@ -1118,7 +1118,7 @@ impl App {
                         let bar = self.bar.as_ref().map(|b| (b.window_number(), b.draggable()));
                         let at = self.bar.as_ref().map(|b| (b.origin().x.round(), b.origin().y.round()));
                         log(&format!("recording bar={bar:?} origin={at:?} elapsed={:.1}s live_preview_running={live}", r.elapsed()));
-                        if let (Some(dir), Some((num, _))) = (std::env::var_os("GLIDE_SELFTEST_SHOTS"), bar) {
+                        if let (Some(dir), Some((num, _))) = (std::env::var_os("GIMBAL_SELFTEST_SHOTS"), bar) {
                             let out = PathBuf::from(dir).join("record-bar.png");
                             let ok = std::process::Command::new("screencapture").args(["-x", "-l", &num.to_string()]).arg(&out).status().is_ok_and(|s| s.success());
                             log(&format!("recording bar screenshot {} ok={ok}", out.display()));
@@ -1429,7 +1429,7 @@ impl App {
                 SourceKind::Device if s.ios_device.is_none() => Some("Connect an iPhone or iPad to see it here.".into()),
                 SourceKind::Device => None,
                 _ if crate::capture::tcc::screen_status() != crate::capture::tcc::Status::Granted => {
-                    Some("Allow Screen Recording for Glide to see a live preview.".into())
+                    Some("Allow Screen Recording for DaisyCap to see a live preview.".into())
                 }
                 _ => None,
             }
@@ -1456,7 +1456,7 @@ impl App {
         self.view = View::Start;
         self.projects = home::scan_projects(&self.settings.dir());
         if let Some(w) = &self.main {
-            w.window.set_title("Glide");
+            w.window.set_title("DaisyCap");
         }
     }
 
@@ -2006,7 +2006,7 @@ impl ApplicationHandler for App {
         }
         if let Some(Recording { rec: Some(r), .. }) = self.recording.take() {
             if let Err(e) = objc2::rc::autoreleasepool(|_| r.stop()) {
-                eprintln!("glide: saving the recording on quit failed: {e:#}");
+                eprintln!("daisycap: saving the recording on quit failed: {e:#}");
             }
         }
         let deadline = Instant::now() + Duration::from_secs(60);
@@ -2078,11 +2078,11 @@ pub fn run(open: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// When Glide is full screen on the display it would record, that display
-/// shows nothing but Glide (left out of the capture): say so over the preview.
+/// When DaisyCap is full screen on the display it would record, that display
+/// shows nothing but DaisyCap (left out of the capture): say so over the preview.
 fn covered_note(s: &home::Settings) -> Option<String> {
     let fs = theme::FULLSCREEN_DISPLAY.load(std::sync::atomic::Ordering::Relaxed);
     let target = if s.display == 0 { macos::main_display() } else { s.display };
     (fs != 0 && matches!(s.source, SourceKind::Display | SourceKind::Area) && fs == target)
-        .then(|| "Glide is full screen on this display, so there's nothing else to show.\nExit full screen to see what you'll record.".into())
+        .then(|| "DaisyCap is full screen on this display, so there's nothing else to show.\nExit full screen to see what you'll record.".into())
 }

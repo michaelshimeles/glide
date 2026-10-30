@@ -7,9 +7,9 @@ import type { Sound } from './sound.js';
 /** The scene is laid out at this size and scaled to fit. */
 export const STAGE = { w: 1200, h: 720 };
 
-/** The Glide window, laid out at its real size in points and scaled onto the stage. */
+/** The DaisyCap window, laid out at its real size in points and scaled onto the stage. */
 export const APP = { x: 80, y: 62, w: 1320, h: 792, scale: 1040 / 1320 };
-/** The window being recorded, on the desktop behind Glide. */
+/** The window being recorded, on the desktop behind DaisyCap. */
 export const DESK = { x: 192, y: 70, scale: 0.85 };
 /** The recording control bar (286×44 points), centred near the bottom of the display. */
 export const BAR = { x: 600 - (286 * 0.9) / 2, y: 584, scale: 0.9 };
@@ -135,14 +135,14 @@ export function wallpaper(t: number): { id: WallpaperId; from?: WallpaperId; fad
 export const padding = (t: number) => lerp(9, 14, easeInOut(span(t, T.padding[1], T.padding[2])));
 export const roundness = (t: number) => lerp(20, 32, easeInOut(span(t, T.roundness[1], T.roundness[2])));
 
-type Glide = { start: number; end: number; to: Point; drag?: boolean };
+type DaisyCap = { start: number; end: number; to: Point; drag?: boolean };
 
-const BEFORE: Glide[] = [
+const BEFORE: DaisyCap[] = [
 	{ start: 300, end: 900, to: fromApp(TARGETS.window) },
 	{ start: 1150, end: 1700, to: fromApp(TARGETS.record) },
 	{ start: 2350, end: 3300, to: fromDesk(REST) }
 ];
-const AFTER: Glide[] = [
+const AFTER: DaisyCap[] = [
 	{ start: 7500, end: 8350, to: fromApp(TARGETS.play) },
 	{ start: 12_100, end: 12_600, to: fromApp(TARGETS.cursor) },
 	{ start: 12_950, end: 13_300, to: fromApp(TARGETS.off) },
@@ -161,7 +161,7 @@ const AFTER: Glide[] = [
 ];
 
 /** A hand-like move along a slight arc; drags stay straight so the knob tracks the pointer. */
-function glide(a: Point, b: Point, p: number, drag = false): Point {
+function daisycap(a: Point, b: Point, p: number, drag = false): Point {
 	if (drag) {
 		const q = easeInOut(p);
 		return { x: lerp(a.x, b.x, q), y: lerp(a.y, b.y, q) };
@@ -178,7 +178,7 @@ export function pointer(t: number): Point {
 	let from = t < T.rec ? { x: 760, y: 470 } : fromDesk(REC.raw(T.stop - T.rec));
 	for (const g of glides) {
 		if (t < g.start) return from;
-		if (t < g.end) return glide(from, g.to, span(t, g.start, g.end), g.drag);
+		if (t < g.end) return daisycap(from, g.to, span(t, g.start, g.end), g.drag);
 		from = g.to;
 	}
 	return from;

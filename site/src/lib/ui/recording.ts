@@ -7,7 +7,7 @@ export type Move = { start: number; end: number; to: Point };
 export type Zoom = { start: number; end: number; at: Point; level: number };
 type Spring = { k: number; c: number; m: number };
 
-/** Glide's spring presets (engine/spring.rs): stiffness, damping, mass. */
+/** DaisyCap's spring presets (engine/spring.rs): stiffness, damping, mass. */
 const SCREEN_FOCUSED: Spring = { k: 200, c: 40, m: 2.25 };
 const CURSOR_SMOOTH: Spring = { k: 470, c: 70, m: 3 };
 const NEAR_CLICK: Spring = { k: 530, c: 40, m: 1 };
@@ -25,7 +25,7 @@ const STEP = 4;
 const minimumJerk = (p: number) => p * p * p * (10 - 15 * p + 6 * p * p);
 
 /**
- * A synthetic recording: a hand-moved pointer with clicks, and what Glide's engine makes of it.
+ * A synthetic recording: a hand-moved pointer with clicks, and what DaisyCap's engine makes of it.
  * The smoothed cursor and the camera are simulated with the app's springs once, up front.
  */
 export class Recording {
@@ -112,7 +112,7 @@ export class Recording {
 		return lerp(track[i], track[Math.min(i + 1, track.length - 1)], f - i);
 	}
 
-	/** The cursor Glide draws with smoothing on. */
+	/** The cursor DaisyCap draws with smoothing on. */
 	smooth(r: number): Point {
 		return { x: this.#sample(this.#smooth[0], r), y: this.#sample(this.#smooth[1], r) };
 	}

@@ -3,6 +3,6 @@ export const version = '0.1.0';
 // universal app for both chips.
 export const macos = 'macOS 14 or later';
 export const chips = 'Apple Silicon and Intel';
-export const origin = 'https://glide.rasmic.xyz';
-export const repo = 'https://github.com/michaelshimeles/glide';
-export const dmg = `${repo}/releases/latest/download/Glide.dmg`;
+export const origin = 'https://daisycap.rasmic.xyz';
+export const repo = 'https://github.com/michaelshimeles/daisycap';
+export const dmg = `${repo}/releases/latest/download/DaisyCap.dmg`;

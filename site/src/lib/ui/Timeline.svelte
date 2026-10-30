@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	export type Segment = { start: number; end: number; label: string; selected?: boolean; shown?: number };
 
-	/** Glide's `fmt_time`: minutes, seconds and tenths. */
+	/** DaisyCap's `fmt_time`: minutes, seconds and tenths. */
 	export const time = (ms: number) => {
 		const s = Math.max(0, ms) / 1000;
 		return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;

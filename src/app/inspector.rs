@@ -188,7 +188,7 @@ fn background(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
                         *path = rel;
                     }
                     if ui.button("Desktop wallpaper").on_hover_text("Use your current macOS desktop picture").clicked() {
-                        let tmp = std::env::temp_dir().join(format!("glide-wallpaper-{}.png", std::process::id()));
+                        let tmp = std::env::temp_dir().join(format!("daisycap-wallpaper-{}.png", std::process::id()));
                         match super::macos::save_desktop_wallpaper(&tmp).and_then(|_| ed.package.import_asset(&tmp, "wallpaper")) {
                             Ok(rel) => *path = rel,
                             Err(e) => ed.status = Some(format!("Couldn't use the desktop wallpaper: {e:#}")),
@@ -562,7 +562,7 @@ fn shortcuts(ui: &mut Ui, d: &mut Project, keys: usize) {
         toggle_row(ui, "Include single keys", &mut s.single_keys);
         slider(ui, "Size", &mut s.size, 0.5..=2.0, "×");
         if keys == 0 {
-            caption(ui, "No key presses were recorded. Grant Glide Input Monitoring in System Settings › Privacy & Security to capture them.");
+            caption(ui, "No key presses were recorded. Grant DaisyCap Input Monitoring in System Settings › Privacy & Security to capture them.");
         } else {
             caption(ui, &format!("{keys} key events recorded"));
         }

@@ -15,17 +15,17 @@
 	import { chips, macos, origin, repo, version } from '#lib/site.js';
 	import { theme } from '#lib/theme.svelte.js';
 
-	const title = 'Glide: an open-source screen recorder for product videos';
+	const title = 'DaisyCap: an open-source screen recorder for product videos';
 	const description =
-		'An open-source, native screen recorder for the Mac. Glide zooms in on what you click, smooths the cursor and frames your screen for polished product videos.';
+		'An open-source, native screen recorder for the Mac. DaisyCap zooms in on what you click, smooths the cursor and frames your screen for polished product videos.';
 	const url = `${origin}/`;
 	const image = `${origin}/og.jpg`;
 	const imageAlt =
-		'Glide’s app icon, the headline “Product videos, in one take.” and a Free for macOS button, beside a dashboard window that Glide framed on a teal and violet wallpaper, with Glide’s recording bar over it.';
+		'DaisyCap’s app icon, the headline “Product videos, in one take.” and a Free for macOS button, beside a dashboard window that DaisyCap framed on a teal and violet wallpaper, with DaisyCap’s recording bar over it.';
 	const app = JSON.stringify({
 		'@context': 'https://schema.org',
 		'@type': 'SoftwareApplication',
-		name: 'Glide',
+		name: 'DaisyCap',
 		description,
 		url,
 		image,
@@ -49,12 +49,12 @@
 	const polish = [
 		{
 			title: 'Zooms that follow your clicks',
-			body: 'Glide reads every click and zooms in on it with spring physics and motion blur, then eases back out. Set the depth, or add manual and follow-the-mouse zooms.',
+			body: 'DaisyCap reads every click and zooms in on it with spring physics and motion blur, then eases back out. Set the depth, or add manual and follow-the-mouse zooms.',
 			Visual: ZoomCard
 		},
 		{
 			title: 'A cursor worth watching',
-			body: 'Glide redraws your cursor sharp at any zoom and eases it along a spring, so shaky moves look deliberate. Add tilt, click circles or ripples, click sounds, or hide it when idle.',
+			body: 'DaisyCap redraws your cursor sharp at any zoom and eases it along a spring, so shaky moves look deliberate. Add tilt, click circles or ripples, click sounds, or hide it when idle.',
 			Visual: CursorCard
 		}
 	];
@@ -102,7 +102,7 @@
 	<meta name="description" content={description} />
 	<link rel="canonical" href={url} />
 	<meta property="og:type" content="website" />
-	<meta property="og:site_name" content="Glide" />
+	<meta property="og:site_name" content="DaisyCap" />
 	<meta property="og:locale" content="en_US" />
 	<meta property="og:url" content={url} />
 	<meta property="og:title" content={title} />
@@ -165,9 +165,9 @@
 
 <nav class="nav">
 	<div class="bar glass">
-		<a class="brand" href="#top" aria-label="Glide, back to top">
+		<a class="brand" href="#top" aria-label="DaisyCap, back to top">
 			<img src={icon} width="26" height="26" alt="" />
-			<span>Glide</span>
+			<span>DaisyCap</span>
 		</a>
 		<div class="links">
 			<a class="link" href="#features">Features</a>
@@ -198,10 +198,10 @@
 
 <main id="top">
 	<header class="hero">
-		<img class="logo" src={icon} width="112" height="112" alt="Glide app icon" />
+		<img class="logo" src={icon} width="112" height="112" alt="DaisyCap app icon" />
 		<h1>Product videos, in one take.</h1>
 		<p class="lede">
-			An open-source screen recorder for the Mac, written in Rust. Glide zooms in where you click,
+			An open-source screen recorder for the Mac, written in Rust. DaisyCap zooms in where you click,
 			smooths the cursor and frames the shot.
 		</p>
 		<div class="cta">
@@ -271,7 +271,7 @@
 <footer class="footer">
 	<div class="brand">
 		<img src={icon} width="20" height="20" alt="" />
-		<span>Glide</span>
+		<span>DaisyCap</span>
 	</div>
 	<p>
 		An open-source alternative to Screen Studio. Not affiliated with or endorsed by Screen Studio, and

@@ -119,7 +119,7 @@ pub fn recording(w: u32, h: u32, duration_ms: f64) -> Recording {
     }
 }
 
-/// Write a synthetic `.glide` package (HEVC screen track plus scripted input).
+/// Write a synthetic `.daisycap` package (HEVC screen track plus scripted input).
 /// Returns (frames, auto zooms).
 pub fn write_package(output: &std::path::Path, duration: f64, width: u32, height: u32) -> anyhow::Result<(u64, usize)> {
     write(output, recording(width, height, duration * 1000.0), duration)

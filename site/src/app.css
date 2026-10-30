@@ -45,7 +45,7 @@
 	color-scheme: light;
 }
 
-/* Glide's own dark and light palettes, for the recreated app UI in the demo and the cards. */
+/* DaisyCap's own dark and light palettes, for the recreated app UI in the demo and the cards. */
 .app {
 	--window: #2b2b2d;
 	--sidebar: #262628;

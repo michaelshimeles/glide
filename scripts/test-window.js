@@ -1,5 +1,5 @@
 // A plain app window from another process (osascript) for the selftest's
-// audio checks: an app ScreenCaptureKit can hear, that isn't Glide.
+// audio checks: an app ScreenCaptureKit can hear, that isn't DaisyCap.
 // Usage: osascript -l JavaScript test-window.js SECONDS [SOUND DELAY]
 // shows the window for SECONDS and, given SOUND, plays it after DELAY s.
 ObjC.import('Cocoa');
@@ -9,7 +9,7 @@ function run(argv) {
   var app = $.NSApplication.sharedApplication;
   app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
   var w = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer($.NSMakeRect(40, 40, 360, 220), 1, $.NSBackingStoreBuffered, false);
-  w.title = argv[1] ? 'Glide audio test (sound)' : 'Glide audio test';
+  w.title = argv[1] ? 'DaisyCap audio test (sound)' : 'DaisyCap audio test';
   w.backgroundColor = $.NSColor.systemTealColor;
   w.orderFrontRegardless;
   var loop = $.NSRunLoop.currentRunLoop;

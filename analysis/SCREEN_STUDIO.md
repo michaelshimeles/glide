@@ -230,7 +230,7 @@ Status legend: ☐ not started · ◐ partial · ☑ done (verified). The *Statu
 | E5 | Targets | File, clipboard, shareable link (upload; public or private). |
 | E6 | Presets | MP4 720p social 60 (default), 1080p social 60, 4K studio 60, GIF 480p studio 15. Estimated file size shown. |
 | E7 | Progress and cancel | Progress UI, cancel, quick-export widget after recording. |
-| E8 | Size-targeted export | Not present in 3.7.1: the export sheet only shows an estimated output size. (The `targetSize` string in the main bundle belongs to the bundled fluent-ffmpeg progress parser.) Glide adds an optional "Fit to file size" for MP4. |
+| E8 | Size-targeted export | Not present in 3.7.1: the export sheet only shows an estimated output size. (The `targetSize` string in the main bundle belongs to the bundled fluent-ffmpeg progress parser.) DaisyCap adds an optional "Fit to file size" for MP4. |
 
 ### App
 | # | Feature | Behaviour |

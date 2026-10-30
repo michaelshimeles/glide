@@ -43,7 +43,7 @@ fn shareable_content() -> Result<Retained<SCShareableContent>> {
     match rx.recv_timeout(Duration::from_secs(15)) {
         Ok(Ok(c)) => Ok(c.0),
         Ok(Err(e)) => bail!(
-            "ScreenCaptureKit refused: {e}\n  -> grant Screen & System Audio Recording to Glide (see `glide permissions`)"
+            "ScreenCaptureKit refused: {e}\n  -> grant Screen & System Audio Recording to DaisyCap (see `daisycap permissions`)"
         ),
         Err(_) => bail!("timed out waiting for ScreenCaptureKit shareable content"),
     }
@@ -118,20 +118,20 @@ pub fn windows() -> Result<Vec<WindowInfo>> {
 pub fn find_window(sel: &str) -> Result<WindowInfo> {
     // An empty selector would match every window.
     if sel.trim().is_empty() {
-        bail!("no window given (use an id from `glide devices` or part of its name)");
+        bail!("no window given (use an id from `daisycap devices` or part of its name)");
     }
     let ws = windows()?;
     if let Ok(id) = sel.parse::<u32>() {
         if let Some(w) = ws.into_iter().find(|w| w.id == id) {
             return Ok(w);
         }
-        bail!("no on-screen window with id {id} (see `glide devices`)");
+        bail!("no on-screen window with id {id} (see `daisycap devices`)");
     }
     let lower = sel.to_lowercase();
     ws.into_iter()
         .filter(|w| format!("{} {}", w.app, w.title).to_lowercase().contains(&lower))
         .max_by(|a, b| (a.size.0 * a.size.1).total_cmp(&(b.size.0 * b.size.1)))
-        .ok_or_else(|| anyhow!("no on-screen window matches {sel:?} (see `glide devices`)"))
+        .ok_or_else(|| anyhow!("no on-screen window matches {sel:?} (see `daisycap devices`)"))
 }
 
 /// ScreenCaptureKit captures the microphone itself only on macOS 15+.
@@ -236,7 +236,7 @@ impl ScreenOutput {
                     let pts = unsafe { sb.presentation_time_stamp() };
                     let peak = crate::capture::mixer::decode(sb).map_or(-1.0, |(_, _, f)| f.iter().fold(0f32, |m, x| m.max(x[0].abs())));
                     let now = crate::util::secs(crate::util::host_now());
-                    eprintln!("glide: debug: system audio buffer {n} (companion={}) pts={:.3} now={now:.3} peak={peak:.3}", self.ivars().audio_only, pts.value as f64 / pts.timescale as f64);
+                    eprintln!("daisycap: debug: system audio buffer {n} (companion={}) pts={:.3} now={now:.3} peak={peak:.3}", self.ivars().audio_only, pts.value as f64 / pts.timescale as f64);
                 }
             }
             shared.with(|s| s.push_audio(AudioKind::System, sb));
@@ -300,7 +300,7 @@ impl ScreenCapture {
                         })
                         .unwrap_or_default();
                     if std::env::var_os("REC_DEBUG").is_some() {
-                        eprintln!("glide: debug: excluding {} windows from capture", excluded.len());
+                        eprintln!("daisycap: debug: excluding {} windows from capture", excluded.len());
                     }
                     SCContentFilter::initWithDisplay_excludingWindows(
                         SCContentFilter::alloc(),
@@ -416,7 +416,7 @@ impl AudioStream {
 }
 
 /// An audio-only stream over a whole display: everything the Mac plays
-/// (other than Glide itself), whatever the video source. Its video is the
+/// (other than DaisyCap itself), whatever the video source. Its video is the
 /// smallest ScreenCaptureKit allows and is dropped.
 fn audio_stream(display: &SCDisplay, exclude_own_audio: bool, shared: Arc<Shared>) -> Result<AudioStream> {
     unsafe {

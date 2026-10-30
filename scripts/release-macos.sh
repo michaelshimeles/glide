@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Build a universal (Apple Silicon + Intel) Glide.app, sign it with a Developer ID certificate and
-# the hardened runtime, notarize and staple it, then package it as Glide.dmg, itself signed,
+# Build a universal (Apple Silicon + Intel) DaisyCap.app, sign it with a Developer ID certificate and
+# the hardened runtime, notarize and staple it, then package it as DaisyCap.dmg, itself signed,
 # notarized and stapled, with the app icon as its volume icon. That file name is the release asset
-# the download page links to. Next to it go Glide-<version>.zip, the app alone, and appcast.xml,
+# the download page links to. Next to it go DaisyCap-<version>.zip, the app alone, and appcast.xml,
 # the signed update feed that points installed copies at that zip. Everything is written to
 # $CARGO_TARGET_DIR/universal-apple-darwin/release once every step has passed; a failed run leaves
 # the previous build's files there. Upload all three to a release tagged
@@ -12,19 +12,19 @@
 # Notarization credentials come from a notarytool keychain profile. Create it once with an
 # app-specific password from account.apple.com and the team ID shown in the certificate name:
 #
-#   xcrun notarytool store-credentials glide-notary --apple-id you@example.com --team-id TEAMID
+#   xcrun notarytool store-credentials daisycap-notary --apple-id you@example.com --team-id TEAMID
 #
-# Updates are signed with the EdDSA key in the login keychain under the account glide, whose
+# Updates are signed with the EdDSA key in the login keychain under the account daisycap, whose
 # public half is SUPublicEDKey in support/Info.plist. Keep an exported copy somewhere safe:
 # installed copies accept no other key, so losing it ends their updates.
 #
-#   "$(scripts/fetch-sparkle.sh)/bin/generate_keys" --account glide -x glide-sparkle.key
-#   "$(scripts/fetch-sparkle.sh)/bin/generate_keys" --account glide -f glide-sparkle.key  # on a new Mac
+#   "$(scripts/fetch-sparkle.sh)/bin/generate_keys" --account daisycap -x daisycap-sparkle.key
+#   "$(scripts/fetch-sparkle.sh)/bin/generate_keys" --account daisycap -f daisycap-sparkle.key  # on a new Mac
 #
 #   SIGN_IDENTITY    signing identity (default: the first "Developer ID Application" in the keychain)
-#   NOTARY_PROFILE   notarytool keychain profile (default: glide-notary)
+#   NOTARY_PROFILE   notarytool keychain profile (default: daisycap-notary)
 #   NOTARY_KEYCHAIN  keychain holding that profile (default: the login keychain)
-#   SPARKLE_ACCOUNT  login keychain account of the update signing key (default: glide)
+#   SPARKLE_ACCOUNT  login keychain account of the update signing key (default: daisycap)
 #   NOTARIZE=0       sign and package without notarizing or writing the update feed
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -33,7 +33,7 @@ cd "$(dirname "$0")/.."
 identity=${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -1)}
 [ -n "$identity" ] || { echo "no Developer ID Application certificate in the keychain; set SIGN_IDENTITY" >&2; exit 1; }
 notarize=${NOTARIZE:-1}
-notary=(--keychain-profile "${NOTARY_PROFILE:-glide-notary}")
+notary=(--keychain-profile "${NOTARY_PROFILE:-daisycap-notary}")
 [ -z "${NOTARY_KEYCHAIN:-}" ] || notary+=(--keychain "$NOTARY_KEYCHAIN")
 if [ "$notarize" = 1 ] && ! xcrun notarytool history "${notary[@]}" >/dev/null; then
   echo "no notarytool credentials; create the profile described at the top of $0, set NOTARY_PROFILE, or set NOTARIZE=0" >&2
@@ -49,9 +49,9 @@ for key in CFBundleShortVersionString CFBundleVersion; do
   fi
 done
 min_macos=$(plutil -extract LSMinimumSystemVersion raw "$plist")
-repo=https://github.com/michaelshimeles/glide
+repo=https://github.com/michaelshimeles/daisycap
 sparkle=$(scripts/fetch-sparkle.sh)
-sparkle_account=${SPARKLE_ACCOUNT:-glide}
+sparkle_account=${SPARKLE_ACCOUNT:-daisycap}
 sparkle_key=$(plutil -extract SUPublicEDKey raw "$plist")
 if [ "$notarize" = 1 ]; then
   key=$("$sparkle/bin/generate_keys" --account "$sparkle_account" -p 2>/dev/null || true)
@@ -102,19 +102,19 @@ out=$CARGO_TARGET_DIR/universal-apple-darwin/release
 work=$tmp/out
 finish() {
   mkdir -p "$out"
-  rm -rf "$out/Glide.app" "$out"/Glide-*.zip "$out/Glide.dmg" "$out/appcast.xml"
+  rm -rf "$out/DaisyCap.app" "$out"/DaisyCap-*.zip "$out/DaisyCap.dmg" "$out/appcast.xml"
   local f
   for f in "$work"/*; do
     mv "$f" "$out/"
     echo "built $out/$(basename "$f")"
   done
 }
-app=$work/Glide.app
+app=$work/DaisyCap.app
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp "$plist" "$app/Contents/Info.plist"
-lipo -create -output "$app/Contents/MacOS/Glide" \
-  "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/glide" "$CARGO_TARGET_DIR/x86_64-apple-darwin/release/glide"
-"$app/Contents/MacOS/Glide" icon "$tmp/AppIcon.iconset" >/dev/null
+lipo -create -output "$app/Contents/MacOS/DaisyCap" \
+  "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/daisycap" "$CARGO_TARGET_DIR/x86_64-apple-darwin/release/daisycap"
+"$app/Contents/MacOS/DaisyCap" icon "$tmp/AppIcon.iconset" >/dev/null
 iconutil -c icns -o "$app/Contents/Resources/AppIcon.icns" "$tmp/AppIcon.iconset"
 # The app isn't sandboxed, so Sparkle's XPC services aren't needed; headers and modules are
 # build-time only.
@@ -133,19 +133,19 @@ done
 codesign --force --options runtime --timestamp --entitlements support/entitlements.plist --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 if [ "$notarize" = 1 ]; then
-  ditto -c -k --keepParent "$app" "$tmp/Glide.zip"
-  notarize "$tmp/Glide.zip" "$app"
+  ditto -c -k --keepParent "$app" "$tmp/DaisyCap.zip"
+  notarize "$tmp/DaisyCap.zip" "$app"
 fi
 
-dmg=$work/Glide.dmg
+dmg=$work/DaisyCap.dmg
 stage=$tmp/dmg
 mkdir "$stage" "$tmp/mnt" "$tmp/check"
-ditto "$app" "$stage/Glide.app"
+ditto "$app" "$stage/DaisyCap.app"
 ln -s /Applications "$stage/Applications"
 cp "$app/Contents/Resources/AppIcon.icns" "$stage/.VolumeIcon.icns"
 # -srcfolder drops the volume's custom-icon flag, so it is set on a writable image that is then
 # compressed.
-hdiutil create -volname Glide -srcfolder "$stage" -format UDRW "$tmp/rw.dmg"
+hdiutil create -volname DaisyCap -srcfolder "$stage" -format UDRW "$tmp/rw.dmg"
 hdiutil attach -nobrowse -noautoopen -mountpoint "$tmp/mnt" "$tmp/rw.dmg" >/dev/null
 SetFile -a C "$tmp/mnt"
 hdiutil detach "$tmp/mnt" >/dev/null
@@ -158,13 +158,13 @@ if [ "$notarize" = 1 ]; then
 fi
 # Check the app as a user gets it: dragged out of the finished DMG.
 hdiutil attach -nobrowse -noautoopen -readonly -mountpoint "$tmp/check" "$dmg" >/dev/null
-ditto "$tmp/check/Glide.app" "$tmp/copied/Glide.app"
+ditto "$tmp/check/DaisyCap.app" "$tmp/copied/DaisyCap.app"
 hdiutil detach "$tmp/check" >/dev/null
-codesign --verify --deep --strict "$tmp/copied/Glide.app"
-[ "$notarize" = 0 ] || spctl --assess --type execute "$tmp/copied/Glide.app"
+codesign --verify --deep --strict "$tmp/copied/DaisyCap.app"
+[ "$notarize" = 0 ] || spctl --assess --type execute "$tmp/copied/DaisyCap.app"
 
 # ditto keeps the signature and the stapled ticket; plain zip does not.
-zip=$work/Glide-$version.zip
+zip=$work/DaisyCap-$version.zip
 ditto -c -k --keepParent "$app" "$zip"
 [ "$notarize" = 1 ] || { finish; exit 0; }
 
@@ -180,10 +180,10 @@ cat > "$appcast" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>Glide</title>
+    <title>DaisyCap</title>
     <link>$repo</link>
     <item>
-      <title>Glide $version</title>
+      <title>DaisyCap $version</title>
       <pubDate>$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>
       <sparkle:version>$version</sparkle:version>
       <sparkle:shortVersionString>$version</sparkle:shortVersionString>
@@ -199,4 +199,4 @@ XML
 "$sparkle/bin/sign_update" --ed-key-file "$key_file" --verify "$appcast"
 rm -f "$key_file"
 finish
-echo "publish with: gh release create v$version $out/Glide.dmg $out/$(basename "$zip") $out/appcast.xml"
+echo "publish with: gh release create v$version $out/DaisyCap.dmg $out/$(basename "$zip") $out/appcast.xml"

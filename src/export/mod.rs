@@ -46,7 +46,7 @@ impl Stats {
 
 /// Where frames come from.
 pub enum Source {
-    /// A `.glide` package directory.
+    /// A `.daisycap` package directory.
     Package(PathBuf),
     /// The built-in synthetic screen (tests, demos).
     Synthetic,
@@ -376,7 +376,7 @@ fn mp4_zero_copy(
     let gpu = pump.renderer.gpu().clone();
     let mut inflight: VecDeque<(Wrapped, wgpu::SubmissionIndex)> = VecDeque::new();
     let mut done = 0u64;
-    let profile = std::env::var_os("GLIDE_PROFILE").is_some();
+    let profile = std::env::var_os("GIMBAL_PROFILE").is_some();
     let mut prof = [0.0f64; 5];
     let mut finish_oldest = |inflight: &mut VecDeque<(Wrapped, wgpu::SubmissionIndex)>, writer: &mut MovieWriter, prof: &mut [f64; 5]| -> Result<()> {
         if let Some((target, idx)) = inflight.pop_front() {

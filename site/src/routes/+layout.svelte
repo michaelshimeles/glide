@@ -8,7 +8,7 @@
 </script>
 
 <svelte:head>
-	<!-- Glide's interface is set in Inter, and the demo that recreates it sits above the fold. -->
+	<!-- DaisyCap's interface is set in Inter, and the demo that recreates it sits above the fold. -->
 	<link rel="preload" as="font" type="font/woff2" href={inter} crossorigin="anonymous" />
 </svelte:head>
 

@@ -6,14 +6,14 @@ use clap::{Parser, Subcommand};
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use glide::engine::scene::Scene;
-use glide::export::{self, Job, Source};
-use glide::project::model::{Codec, ExportFormat, ExportSettings, Quality};
-use glide::project::{self, Package};
-use glide::render::{Gpu, Renderer, VideoFrame};
+use daisycap::engine::scene::Scene;
+use daisycap::export::{self, Job, Source};
+use daisycap::project::model::{Codec, ExportFormat, ExportSettings, Quality};
+use daisycap::project::{self, Package};
+use daisycap::render::{Gpu, Renderer, VideoFrame};
 
 #[derive(Parser)]
-#[command(name = "glide", version, about = "Fast native screen recorder and editor")]
+#[command(name = "daisycap", version, about = "Fast native screen recorder and editor")]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -23,7 +23,7 @@ struct Cli {
 enum Cmd {
     /// Render one frame of a project to PNG.
     Frame {
-        /// A .glide package (omit with --synthetic).
+        /// A .daisycap package (omit with --synthetic).
         project: Option<PathBuf>,
         /// Use the built-in synthetic recording.
         #[arg(long)]
@@ -42,7 +42,7 @@ enum Cmd {
     /// Check that every Background setting (and padding, roundness and
     /// shadow) visibly changes a rendered frame of a project.
     CheckBackground {
-        /// A .glide package (omit with --synthetic).
+        /// A .daisycap package (omit with --synthetic).
         project: Option<PathBuf>,
         #[arg(long)]
         synthetic: bool,
@@ -53,7 +53,7 @@ enum Cmd {
         height: u32,
     },
     /// Measure a recording's or a video's audio, and how much of it is a
-    /// test tone (system and mic tracks of a .glide package, or every audio
+    /// test tone (system and mic tracks of a .daisycap package, or every audio
     /// track of a media file).
     AudioCheck {
         path: PathBuf,
@@ -89,18 +89,18 @@ enum Cmd {
         #[arg(long)]
         target_mb: Option<u32>,
     },
-    /// Record the screen into a new .glide project.
+    /// Record the screen into a new .daisycap project.
     Record {
-        /// Display id (see `glide devices`); default: main display.
+        /// Display id (see `daisycap devices`); default: main display.
         #[arg(long)]
         display: Option<u32>,
-        /// Window id (see `glide devices`).
+        /// Window id (see `daisycap devices`).
         #[arg(long)]
         window: Option<u32>,
         /// Area as x,y,w,h in points on the display.
         #[arg(long)]
         area: Option<String>,
-        /// Record a USB-connected iPhone/iPad (id from `glide devices`).
+        /// Record a USB-connected iPhone/iPad (id from `daisycap devices`).
         #[arg(long)]
         device: Option<String>,
         /// Record a generated test pattern instead of the screen.
@@ -117,7 +117,7 @@ enum Cmd {
         duration: Option<f64>,
         #[arg(long, default_value_t = 60)]
         fps: u32,
-        /// Folder for the project (default ~/Movies/Glide).
+        /// Folder for the project (default ~/Movies/DaisyCap).
         #[arg(long)]
         dir: Option<PathBuf>,
         #[arg(long)]
@@ -131,7 +131,7 @@ enum Cmd {
     },
     /// Open the app (the default with no subcommand).
     Gui {
-        /// A .glide project to open.
+        /// A .daisycap project to open.
         project: Option<PathBuf>,
     },
     /// Render the UI headlessly to PNG (layout checks without a display).
@@ -201,7 +201,7 @@ enum Cmd {
         /// x,y,w,h in points on the main display.
         #[arg(long)]
         area: Option<String>,
-        /// A camera ("default", or a unique id / name from `glide devices`).
+        /// A camera ("default", or a unique id / name from `daisycap devices`).
         #[arg(long)]
         camera: Option<String>,
         #[arg(long, default_value_t = 2.0)]
@@ -209,7 +209,7 @@ enum Cmd {
         #[arg(short, long)]
         output: PathBuf,
     },
-    /// Resize a window (id, name, or pid:<process id>; see `glide devices`) to WxH points.
+    /// Resize a window (id, name, or pid:<process id>; see `daisycap devices`) to WxH points.
     ResizeWindow { window: String, size: String },
     /// List where content under a blur/pixelate mask moves ("data may be visible").
     CheckMasks { project: PathBuf },
@@ -259,40 +259,40 @@ fn main() -> Result<()> {
         }
         Some(Cmd::Devices) => devices(),
         Some(Cmd::Permissions { request }) => permissions(request),
-        Some(Cmd::Gui { project }) => glide::app::run(project),
+        Some(Cmd::Gui { project }) => daisycap::app::run(project),
         Some(Cmd::BenchPreview { project, width, height }) => {
-            let fps = glide::app::snapshot::bench_preview(&project, (width, height), 240)?;
+            let fps = daisycap::app::snapshot::bench_preview(&project, (width, height), 240)?;
             println!("preview {width}x{height}: {fps:.0} frames/s");
             Ok(())
         }
         Some(Cmd::Denoise { input, output }) => {
-            let audio = glide::media::read_audio(&input, 0)?;
+            let audio = daisycap::media::read_audio(&input, 0)?;
             let t = Instant::now();
-            let out = glide::export::isolate::isolate_voice(&audio).ok_or_else(|| anyhow::anyhow!("voice isolation unavailable"))?;
+            let out = daisycap::export::isolate::isolate_voice(&audio).ok_or_else(|| anyhow::anyhow!("voice isolation unavailable"))?;
             eprintln!("{:.1} s of audio in {:.2} s", audio.len() as f64 / 48_000.0, t.elapsed().as_secs_f64());
-            glide::app::player::write_wav(&output, &out)?;
+            daisycap::app::player::write_wav(&output, &out)?;
             println!("{}", output.display());
             Ok(())
         }
         Some(Cmd::Wallpaper { output }) => {
-            glide::app::macos::save_desktop_wallpaper(&output)?;
+            daisycap::app::macos::save_desktop_wallpaper(&output)?;
             println!("{}", output.display());
             Ok(())
         }
         Some(Cmd::Icon { output, png }) => {
             match png {
-                Some(size) => image::save_buffer(&output, &glide::render::icon::render(size), size, size, image::ExtendedColorType::Rgba8)?,
-                None => glide::render::icon::write_iconset(&output)?,
+                Some(size) => image::save_buffer(&output, &daisycap::render::icon::render(size), size, size, image::ExtendedColorType::Rgba8)?,
+                None => daisycap::render::icon::write_iconset(&output)?,
             }
             println!("{}", output.display());
             Ok(())
         }
         Some(Cmd::Snapshot { project, tab, select, export_sheet, fresh, light, at, window, recents, live, output }) => {
-            use glide::app::editor::Tab;
+            use daisycap::app::editor::Tab;
             let tab = tab.map(|t| {
                 Tab::ALL.iter().find(|(_, n)| n.eq_ignore_ascii_case(&t)).map(|(t, _)| *t).expect("unknown tab")
             });
-            let shot = glide::app::snapshot::Shot {
+            let shot = daisycap::app::snapshot::Shot {
                 project: project.as_deref(),
                 tab,
                 select,
@@ -305,16 +305,16 @@ fn main() -> Result<()> {
                 recents,
                 live,
             };
-            glide::app::snapshot::render(&shot, &output)?;
+            daisycap::app::snapshot::render(&shot, &output)?;
             println!("{}", output.display());
             Ok(())
         }
         Some(Cmd::Preview { window, area, camera, secs, output }) => {
-            use glide::capture::preview::{LivePreview, Source};
+            use daisycap::capture::preview::{LivePreview, Source};
             let source = if let Some(c) = camera {
                 Source::Camera { id: (c != "default").then_some(c) }
             } else if let Some(w) = window {
-                Source::Window { id: glide::capture::screen::find_window(&w)?.id }
+                Source::Window { id: daisycap::capture::screen::find_window(&w)?.id }
             } else if let Some(a) = area {
                 let v: Vec<f64> = a.split(',').map(|x| x.trim().parse().unwrap_or(0.0)).collect();
                 anyhow::ensure!(v.len() == 4, "--area expects x,y,w,h");
@@ -351,17 +351,17 @@ fn main() -> Result<()> {
             let pid = window.strip_prefix("pid:").and_then(|p| p.parse::<i32>().ok());
             let (id, label) = match (pid, window.parse::<u32>()) {
                 (Some(pid), _) => {
-                    let id = glide::capture::winsize::window_of_pid(pid).ok_or_else(|| anyhow::anyhow!("process {pid} has no window on screen"))?;
+                    let id = daisycap::capture::winsize::window_of_pid(pid).ok_or_else(|| anyhow::anyhow!("process {pid} has no window on screen"))?;
                     (id, format!("window {id}"))
                 }
                 (None, Ok(id)) => (id, format!("window {id}")),
                 (None, Err(_)) => {
-                    let w = glide::capture::screen::find_window(&window)?;
+                    let w = daisycap::capture::screen::find_window(&window)?;
                     (w.id, format!("{} — {}", w.app, w.title))
                 }
             };
-            let before = glide::capture::winsize::window_size(id)?;
-            let got = glide::capture::winsize::resize(id, w, h)?;
+            let before = daisycap::capture::winsize::window_size(id)?;
+            let got = daisycap::capture::winsize::resize(id, w, h)?;
             println!("{label}: {:.0}×{:.0} → {:.0}×{:.0}", before.0, before.1, got.0, got.1);
             Ok(())
         }
@@ -369,8 +369,8 @@ fn main() -> Result<()> {
             let pkg = Package::new(&project);
             let (p, rec) = pkg.load()?;
             let t0 = Instant::now();
-            let found = glide::exposure::scan(&pkg.rec(&rec.meta.screen.file), &p.timeline.masks, &mut Default::default(), &|| false)?;
-            let hiding = p.timeline.masks.iter().filter(|m| glide::exposure::hides(m.kind)).count();
+            let found = daisycap::exposure::scan(&pkg.rec(&rec.meta.screen.file), &p.timeline.masks, &mut Default::default(), &|| false)?;
+            let hiding = p.timeline.masks.iter().filter(|m| daisycap::exposure::hides(m.kind)).count();
             println!("{hiding} hiding masks checked in {:.2} s", t0.elapsed().as_secs_f64());
             for e in &found {
                 println!("mask {}: content moved {:.1}–{:.1} s", e.mask, e.start / 1000.0, e.end / 1000.0);
@@ -381,23 +381,23 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Cmd::Transcribe { project, engine }) => {
-            let engine = glide::transcribe::Engine::parse(&engine).ok_or_else(|| anyhow::anyhow!("unknown engine {engine:?}"))?;
+            let engine = daisycap::transcribe::Engine::parse(&engine).ok_or_else(|| anyhow::anyhow!("unknown engine {engine:?}"))?;
             let t0 = Instant::now();
-            let n = glide::transcribe::transcribe_package(&Package::new(&project), engine, &Default::default())?;
+            let n = daisycap::transcribe::transcribe_package(&Package::new(&project), engine, &Default::default())?;
             eprintln!("{} in {:.1} s", engine.label(), t0.elapsed().as_secs_f64());
-            println!("{n} words → {}", glide::transcribe::transcript_path(&Package::new(&project)).display());
+            println!("{n} words → {}", daisycap::transcribe::transcript_path(&Package::new(&project)).display());
             Ok(())
         }
-        None => glide::app::run(None),
+        None => daisycap::app::run(None),
     }
 }
 
-type Loaded = (glide::project::model::Project, glide::project::recording::Recording, Option<PathBuf>);
+type Loaded = (daisycap::project::model::Project, daisycap::project::recording::Recording, Option<PathBuf>);
 
 /// A project to render frames of: a package, or the synthetic recording.
 fn load_for_frames(pkg: Option<PathBuf>, synthetic: bool) -> Result<Loaded> {
     Ok(if synthetic {
-        let rec = glide::synth::recording(1920, 1080, 12_000.0);
+        let rec = daisycap::synth::recording(1920, 1080, 12_000.0);
         (project::new_project("synthetic", &rec), rec, None)
     } else {
         let pkg = Package::new(pkg.context("a project path or --synthetic")?);
@@ -407,24 +407,24 @@ fn load_for_frames(pkg: Option<PathBuf>, synthetic: bool) -> Result<Loaded> {
 }
 
 /// Render the frame at `time` seconds, `height` pixels tall.
-fn render_frame(r: &mut Renderer, (proj, rec, dir): &Loaded, time: f64, height: u32) -> Result<(glide::render::Image, f64)> {
+fn render_frame(r: &mut Renderer, (proj, rec, dir): &Loaded, time: f64, height: u32) -> Result<(daisycap::render::Image, f64)> {
     let mut scene = Scene::new(proj.clone(), rec, 60.0);
     let f = scene.frame(time * 1000.0, height as f64);
     r.prepare(&proj.style, rec, dir.as_deref());
     match dir {
         None => {
             let (w, h) = (rec.meta.screen.width, rec.meta.screen.height);
-            let px = glide::synth::screen_bgra(w, h, f.source_ms);
+            let px = daisycap::synth::screen_bgra(w, h, f.source_ms);
             r.set_screen(&VideoFrame { width: w, height: h, stride: (w * 4) as usize, bgra: &px });
         }
         Some(dir) => {
             let pkg = Package::new(dir);
-            let mut src = glide::media::FrameSource::open(&pkg.rec(&rec.meta.screen.file))?;
+            let mut src = daisycap::media::FrameSource::open(&pkg.rec(&rec.meta.screen.file))?;
             if let Some(vf) = src.frame_at(f.source_ms) {
                 vf.with_bgra(|v| r.set_screen(v));
             }
             if let Some(cam) = &rec.meta.camera
-                && let Ok(mut c) = glide::media::FrameSource::open(&pkg.rec(&cam.file))
+                && let Ok(mut c) = daisycap::media::FrameSource::open(&pkg.rec(&cam.file))
                 && let Some(vf) = c.frame_at(f.source_ms - cam.offset_ms)
             {
                 vf.with_bgra(|v| r.set_camera(v));
@@ -461,7 +461,7 @@ fn audio_check(path: PathBuf, freq: f64, require: Vec<String>, min_seconds: f64)
         }
     } else {
         for i in 0..8 {
-            if glide::media::read_audio(&path, i).is_err() {
+            if daisycap::media::read_audio(&path, i).is_err() {
                 if i == 0 {
                     println!("audio0: no audio track");
                 }
@@ -472,8 +472,8 @@ fn audio_check(path: PathBuf, freq: f64, require: Vec<String>, min_seconds: f64)
     }
     let mut found = std::collections::HashMap::new();
     for (label, file, track) in &tracks {
-        let samples = glide::media::read_audio(file, *track)?;
-        let l = glide::audiocheck::analyze(&samples, freq);
+        let samples = daisycap::media::read_audio(file, *track)?;
+        let l = daisycap::audiocheck::analyze(&samples, freq);
         println!(
             "{label}: {:.1} s, {:.1} dBFS RMS; {freq:.0} Hz tone for {:.2} s at {:.1} dBFS",
             l.seconds, l.rms_db, l.tone_seconds, l.tone_db
@@ -488,12 +488,12 @@ fn audio_check(path: PathBuf, freq: f64, require: Vec<String>, min_seconds: f64)
 }
 
 fn check_background(pkg: Option<PathBuf>, synthetic: bool, time: f64, height: u32) -> Result<()> {
-    use glide::render::bgcheck;
+    use daisycap::render::bgcheck;
     let mut loaded = load_for_frames(pkg, synthetic)?;
     // Zoomed-in frames push the background out of view.
     loaded.0.timeline.zooms.clear();
     let style = loaded.0.style.clone();
-    let tmp = std::env::temp_dir().join(format!("glide-check-background-{}", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("daisycap-check-background-{}", std::process::id()));
     std::fs::create_dir_all(&tmp)?;
     let image = tmp.join("checker.png");
     bgcheck::checkerboard(&image)?;
@@ -542,8 +542,8 @@ fn export_cmd(
     target_mb: Option<u32>,
 ) -> Result<()> {
     let (proj, rec, source, base) = if synthetic {
-        let rec = glide::synth::recording(1920, 1080, 12_000.0);
-        (project::new_project("synthetic", &rec), rec, Source::Synthetic, PathBuf::from("synthetic.glide"))
+        let rec = daisycap::synth::recording(1920, 1080, 12_000.0);
+        (project::new_project("synthetic", &rec), rec, Source::Synthetic, PathBuf::from("synthetic.daisycap"))
     } else {
         let path = pkg.expect("project path or --synthetic");
         let pkg = Package::new(&path);
@@ -604,10 +604,10 @@ fn export_cmd(
 }
 
 fn synth(output: PathBuf, duration: f64, width: u32, height: u32, device: bool, tone: Option<f64>) -> Result<()> {
-    let write = if device { glide::synth::write_device_package } else { glide::synth::write_package };
+    let write = if device { daisycap::synth::write_device_package } else { daisycap::synth::write_package };
     let (frames, zooms) = write(&output, duration, width, height)?;
     if let Some(hz) = tone {
-        glide::synth::add_tone(&output, hz)?;
+        daisycap::synth::add_tone(&output, hz)?;
     }
     println!("{} ({frames} frames, {zooms} zooms)", output.display());
     Ok(())
@@ -634,24 +634,24 @@ fn record(
     name: Option<String>,
     (hide_desktop_icons, hide_dock): (bool, bool),
 ) -> Result<()> {
-    use glide::recorder::{Options, Recorder, Target};
+    use daisycap::recorder::{Options, Recorder, Target};
     let target = if pattern {
         Target::Pattern
     } else if let Some(id) = device {
-        glide::capture::camera::enable_screen_capture_devices();
+        daisycap::capture::camera::enable_screen_capture_devices();
         std::thread::sleep(std::time::Duration::from_millis(1500));
-        let found = glide::capture::camera::ios_devices();
+        let found = daisycap::capture::camera::ios_devices();
         let d = found
             .iter()
             .find(|d| d.id == id || d.name.to_lowercase().contains(&id.to_lowercase()))
-            .ok_or_else(|| anyhow::anyhow!("no iPhone/iPad matches {id:?} (see `glide devices`)"))?;
+            .ok_or_else(|| anyhow::anyhow!("no iPhone/iPad matches {id:?} (see `daisycap devices`)"))?;
         Target::Device { id: d.id.clone() }
     } else if let Some(id) = window {
         Target::Window { id }
     } else if let Some(a) = area {
         let v: Vec<f64> = a.split(',').map(|x| x.trim().parse().unwrap_or(0.0)).collect();
         anyhow::ensure!(v.len() == 4, "--area expects x,y,w,h");
-        Target::Area { display: display.unwrap_or(0), rect: glide::engine::geom::Rect::new(v[0], v[1], v[2], v[3]) }
+        Target::Area { display: display.unwrap_or(0), rect: daisycap::engine::geom::Rect::new(v[0], v[1], v[2], v[3]) }
     } else {
         Target::Display { id: display.unwrap_or(0) }
     };
@@ -666,13 +666,13 @@ fn record(
         hide_desktop_icons,
         hide_dock,
         // The command line makes no sound of its own; excluding "this app"
-        // would also drop a running Glide window's audio.
+        // would also drop a running DaisyCap window's audio.
         exclude_own_audio: false,
         ..Default::default()
     };
     unsafe { libc::signal(libc::SIGINT, on_sigint as *const () as usize) };
     let rec = Recorder::start(opts)?;
-    eprintln!("glide: recording to {} (Ctrl-C to stop)", rec.package.root.display());
+    eprintln!("daisycap: recording to {} (Ctrl-C to stop)", rec.package.root.display());
     loop {
         std::thread::sleep(std::time::Duration::from_millis(50));
         if STOP.load(std::sync::atomic::Ordering::SeqCst) || rec.error().is_some() {
@@ -686,7 +686,7 @@ fn record(
         }
     }
     if let Some(e) = rec.error() {
-        eprintln!("glide: {e}");
+        eprintln!("daisycap: {e}");
     }
     let path = rec.stop()?;
     let pkg = Package::new(&path);
@@ -707,7 +707,7 @@ fn record(
 }
 
 fn devices() -> Result<()> {
-    use glide::capture::{camera, screen};
+    use daisycap::capture::{camera, screen};
     println!("Displays:");
     for d in screen::displays()? {
         println!("  {:>10}  {}x{} pt  {}x{} px", d.id, d.points.0, d.points.1, d.pixels.0, d.pixels.1);
@@ -735,15 +735,15 @@ fn devices() -> Result<()> {
 }
 
 fn permissions(request: bool) -> Result<()> {
-    use glide::capture::tcc;
+    use daisycap::capture::tcc;
     if request {
         tcc::request_all(true, true, true, std::time::Duration::from_secs(30));
     }
     println!("Screen Recording: {:?}", tcc::screen_status());
     println!("Microphone:       {:?}", tcc::mic_status());
     println!("Camera:           {:?}", tcc::camera_status());
-    println!("Accessibility:    {} (resizing windows)", if glide::capture::winsize::trusted(false) { "Authorized" } else { "NotDetermined/Denied" });
-    if glide::capture::camera::builtin_mic_off(None) {
+    println!("Accessibility:    {} (resizing windows)", if daisycap::capture::winsize::trusted(false) { "Authorized" } else { "NotDetermined/Denied" });
+    if daisycap::capture::camera::builtin_mic_off(None) {
         println!("Note: the lid is closed, so the built-in microphone records silence.");
     }
     Ok(())

@@ -114,7 +114,7 @@ impl Default for Settings {
 
 fn settings_path() -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join("Library/Application Support/Glide/settings.json")
+    home.join("Library/Application Support/DaisyCap/settings.json")
 }
 
 impl Settings {
@@ -199,7 +199,7 @@ impl Devices {
                     // SAFETY: SCWindow/SCRunningApplication accessors.
                     let ws: Vec<_> = ws
                         .into_iter()
-                        .filter(|w| !w.app.is_empty() && w.app != "Glide" && unsafe { w.window.owningApplication().is_none_or(|a| a.processID() != me) })
+                        .filter(|w| !w.app.is_empty() && w.app != "DaisyCap" && unsafe { w.window.owningApplication().is_none_or(|a| a.processID() != me) })
                         .collect();
                     let displays = crate::capture::winsize::display_sizes(&ws);
                     ws.into_iter()
@@ -853,7 +853,7 @@ pub struct LiveView {
     pub system_level: Option<f32>,
     pub mic_level: Option<f32>,
     pub note: Option<String>,
-    /// Shown over the live screen (e.g. Glide itself covers the display).
+    /// Shown over the live screen (e.g. DaisyCap itself covers the display).
     pub covered: Option<String>,
 }
 

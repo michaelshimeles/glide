@@ -2,7 +2,7 @@
 //! (wallpapers, blur, gradients, colours, an image) and the padding,
 //! roundness and shadow that frame it, and measure how much of the picture
 //! each edit changes. Used by the tests (through the editor preview) and by
-//! `glide check-background` (on real recordings).
+//! `daisycap check-background` (on real recordings).
 
 use std::path::Path;
 

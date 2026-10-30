@@ -1,4 +1,4 @@
-//! Recording into a `.glide` package: the screen (without the cursor) with
+//! Recording into a `.daisycap` package: the screen (without the cursor) with
 //! system audio and microphone stems, the camera as its own file, and
 //! input events for re-rendering the cursor, zooms and key badges.
 
@@ -32,7 +32,7 @@ pub enum Target {
     Area { display: u32, rect: Rect },
     /// Generated test pattern (no permission needed).
     Pattern,
-    /// A USB-connected iPhone or iPad screen (unique id from `glide devices`).
+    /// A USB-connected iPhone or iPad screen (unique id from `daisycap devices`).
     Device { id: String },
 }
 
@@ -56,7 +56,7 @@ pub struct Options {
     pub hide_desktop_icons: bool,
     pub hide_dock: bool,
     /// Leave this app's own sounds out of the system audio. ScreenCaptureKit
-    /// treats every running copy of Glide as this app, so the command line
+    /// treats every running copy of DaisyCap as this app, so the command line
     /// (which makes no sound) turns it off.
     pub exclude_own_audio: bool,
 }
@@ -322,7 +322,7 @@ impl Recorder {
             Some(sel) => match CameraRec::start(sel.as_deref(), &package.rec("camera.mov")) {
                 Ok(c) => Some(c),
                 Err(e) => {
-                    eprintln!("glide: camera unavailable: {e}");
+                    eprintln!("daisycap: camera unavailable: {e}");
                     None
                 }
             },
@@ -479,7 +479,7 @@ impl Recorder {
         if let Some(c) = self.camera.take()
             && let Err(e) = c.finish()
         {
-            eprintln!("glide: camera file: {e}");
+            eprintln!("daisycap: camera file: {e}");
         }
         if let Some(d) = self.device.take() {
             let t0 = d.t0();

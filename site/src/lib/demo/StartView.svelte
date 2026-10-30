@@ -4,7 +4,7 @@
 	import TrafficLights from '#lib/ui/TrafficLights.svelte';
 	import { DESK, STAGE } from './script.js';
 
-	/** Glide's start window (`home.rs`), in points: toolbar, live preview, settings and record bar. */
+	/** DaisyCap's start window (`home.rs`), in points: toolbar, live preview, settings and record bar. */
 	let {
 		window,
 		pressed = null,

@@ -109,14 +109,14 @@ impl MenuBar {
         let pause = item("Pause", Some(sel!(togglePause:)), "");
         menu.addItem(&pause);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
-        menu.addItem(&item("Show Glide", Some(sel!(showWindow:)), ""));
+        menu.addItem(&item("Show DaisyCap", Some(sel!(showWindow:)), ""));
         menu.addItem(&item("Open Projects Folder", Some(sel!(openFolder:)), ""));
         menu.addItem(&item("Check for Updates…", Some(sel!(checkUpdates:)), ""));
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         let hotkey = item("Global hotkey: ⌥⇧⌘R", None, "");
         hotkey.setEnabled(false);
         menu.addItem(&hotkey);
-        menu.addItem(&item("Quit Glide", Some(sel!(quit:)), "q"));
+        menu.addItem(&item("Quit DaisyCap", Some(sel!(quit:)), "q"));
         status.setMenu(Some(&menu));
         let mut mb = MenuBar { status, record, pause, sources, hotkey, _target: target, last: None };
         mb.update(&View { recording: false, paused: false, finishing: false, clock: "" });
@@ -167,7 +167,7 @@ impl MenuBar {
         } else {
             ("record.circle", String::new(), false)
         };
-        if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(&ns(symbol), Some(&ns("Glide"))) {
+        if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(&ns(symbol), Some(&ns("DaisyCap"))) {
             img.setTemplate(!red);
             button.setImage(Some(&img));
         }

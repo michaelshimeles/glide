@@ -40,7 +40,7 @@ pub fn list_all() -> Vec<PickWindow> {
     macos::display_ids().into_iter().flat_map(list).collect()
 }
 
-/// Recordable windows (not Glide's own) that show on `display`,
+/// Recordable windows (not DaisyCap's own) that show on `display`,
 /// frontmost first.
 pub fn list(display: u32) -> Vec<PickWindow> {
     let (display_id, dx, dy, dw, dh) = macos::display_frame(display);

@@ -62,7 +62,7 @@ fn open(name: Option<&str>, level: Arc<AtomicU32>) -> Result<cpal::Stream> {
     .context("no microphone")?;
     let supported = device.default_input_config()?;
     let config = supported.config();
-    let err = |e| eprintln!("glide: mic meter: {e}");
+    let err = |e| eprintln!("daisycap: mic meter: {e}");
     use cpal::SampleFormat as F;
     let stream = match supported.sample_format() {
         F::F32 => device.build_input_stream(config.clone(), move |d: &[f32], _: &_| peak(&level, d.iter().copied()), err, None)?,

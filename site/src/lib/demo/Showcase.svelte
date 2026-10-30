@@ -21,7 +21,7 @@
 	<div
 		class="frame"
 		role="img"
-		aria-label="Demo: Glide records a window while the pointer clicks two buttons, then the editor plays it back with automatic zooms on each click. Cursor smoothing is switched off and on, the background changes from Aurora to Ocean, Grape and Lagoon with more padding and rounder corners, and the video exports at 3.9 times real time."
+		aria-label="Demo: DaisyCap records a window while the pointer clicks two buttons, then the editor plays it back with automatic zooms on each click. Cursor smoothing is switched off and on, the background changes from Aurora to Ocean, Grape and Lagoon with more padding and rounder corners, and the video exports at 3.9 times real time."
 		{@attach fit}
 		{@attach player.observe}
 	>

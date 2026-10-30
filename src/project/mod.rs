@@ -1,8 +1,8 @@
-//! `.glide` packages: a folder holding the editable project and the
+//! `.daisycap` packages: a folder holding the editable project and the
 //! untouched recording.
 //!
 //! ```text
-//! Name.glide/
+//! Name.daisycap/
 //!   project.json        style, timeline, export settings
 //!   recording/
 //!     meta.json         what was recorded
@@ -29,7 +29,7 @@ use crate::engine::zoom;
 use model::{DeviceFrame, Project, Slice, Style};
 use recording::{Recording, RecordingMeta, SourceKind};
 
-pub const EXTENSION: &str = "glide";
+pub const EXTENSION: &str = "daisycap";
 
 #[derive(Clone, Debug)]
 pub struct Package {
@@ -143,10 +143,10 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 /// Default folder for new projects.
 pub fn projects_dir() -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-    home.join("Movies").join("Glide")
+    home.join("Movies").join("DaisyCap")
 }
 
-/// A new, unused package path like `~/Movies/Glide/Recording 2026-10-11 at 11.30.12.glide`.
+/// A new, unused package path like `~/Movies/DaisyCap/Recording 2026-10-11 at 11.30.12.daisycap`.
 pub fn new_package_path(dir: &Path, stamp: &str) -> PathBuf {
     let base = format!("Recording {stamp}");
     let mut path = dir.join(format!("{base}.{EXTENSION}"));
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn save_and_load_round_trip() {
-        let dir = std::env::temp_dir().join(format!("glide-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("daisycap-test-{}", std::process::id()));
         fs::create_dir_all(dir.join("recording")).unwrap();
         let pkg = Package::new(&dir);
         write_json(&pkg.rec("meta.json"), &RecordingMeta { duration_ms: 1000.0, ..Default::default() }).unwrap();

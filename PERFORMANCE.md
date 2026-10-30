@@ -10,7 +10,7 @@ after performance work and update this file.
 
 ## Recording overhead
 
-`glide record -t 10`, measured with `/usr/bin/time -l` over the whole recorder
+`daisycap record -t 10`, measured with `/usr/bin/time -l` over the whole recorder
 process (ScreenCaptureKit capture, hardware HEVC encode, 120 Hz mouse/cursor
 logging, package write). CPU is user + system time divided by wall time.
 
@@ -48,7 +48,7 @@ GIF delta frames (only changed 32 px tiles after the first frame) measured
 on the same 12:15 static recording: 25.7 MB → 4.7 MB; synthetic 7.4 → 4.0 MB,
 at the same encode speed.
 
-### Where the time goes (`GLIDE_PROFILE=1`)
+### Where the time goes (`GIMBAL_PROFILE=1`)
 
 | Export | Decode + upload | Render + submit | Encoder back-pressure |
 |---|---|---|---|
@@ -68,7 +68,7 @@ at the same encode speed.
 
 ## Editor preview (real-time playback)
 
-`glide bench-preview` runs the editor's actual preview path — decode the
+`daisycap bench-preview` runs the editor's actual preview path — decode the
 source frame, wrap it as a GPU texture without copying, render the full
 scene into a 2400×1500 px target (the preview area of a full-screen editor
 on a Retina display) — over 240 consecutive 60 fps frames.
@@ -97,7 +97,7 @@ CoreAudio from a real-time callback; the playhead is the clock.
 
 ## Mask checks ("data may be visible")
 
-`glide check-masks` runs the same background check the editor uses: every
+`daisycap check-masks` runs the same background check the editor uses: every
 blur/pixelate mask is compared with its first frame every 100 ms, all masks
 sharing one forward decoding pass.
 
@@ -108,7 +108,7 @@ sharing one forward decoding pass.
 
 ## Captions (Whisper)
 
-`glide transcribe --engine whisper-base` on 7.0 s of synthesized speech
+`daisycap transcribe --engine whisper-base` on 7.0 s of synthesized speech
 (`say`): 0.4 s including loading the model (Metal), so about 17× real
 time; all 20 words correct. The first run also downloads the model
 (148 MB, ~8 s here), and the first run of a newly built binary takes
@@ -119,7 +119,7 @@ about 6 s while Metal compiles whisper.cpp's shaders.
 Recording setup shows the selected source live (ScreenCaptureKit, 10 fps,
 1280 px long edge, copied into an egui texture): the release build used
 6.1 % of one core over 10 s with it on screen, and 0 % with the window
-hidden (the stream stops). It starts in about 0.2 s (`glide preview`).
+hidden (the stream stops). It starts in about 0.2 s (`daisycap preview`).
 
 ## Idle
 
@@ -132,6 +132,6 @@ at 107 MB resident.
 ```sh
 scripts/bench.sh              # needs Screen Recording permission for the terminal
 scripts/bench.sh --no-screen  # synthetic sources only
-GLIDE_PROFILE=1 dist/glide export Project.glide --height 2160
-dist/glide bench-preview Project.glide
+GIMBAL_PROFILE=1 dist/daisycap export Project.daisycap --height 2160
+dist/daisycap bench-preview Project.daisycap
 ```

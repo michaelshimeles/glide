@@ -11,13 +11,13 @@ use objc2_av_foundation::{
 };
 use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
 
-const DISCLAIM_ENV: &str = "GLIDE_DISCLAIMED";
+const DISCLAIM_ENV: &str = "GIMBAL_DISCLAIMED";
 
 /// Re-exec ourselves with responsibility disclaimed so TCC attributes screen,
 /// mic and camera access to `rec` itself rather than the terminal/tmux/IDE that
 /// launched it. Returns only in the child (or if disclaim is unavailable).
 pub fn disclaim_and_reexec() {
-    if std::env::var_os(DISCLAIM_ENV).is_some() || std::env::var_os("GLIDE_NO_DISCLAIM").is_some() {
+    if std::env::var_os(DISCLAIM_ENV).is_some() || std::env::var_os("GIMBAL_NO_DISCLAIM").is_some() {
         return;
     }
     // Already responsible for ourselves (launched via `open Rec.app`, Login
@@ -41,7 +41,7 @@ pub fn disclaim_and_reexec() {
         )
     };
     if sym.is_null() {
-        eprintln!("glide: warning: responsibility disclaim unavailable; permissions attach to the launching app");
+        eprintln!("daisycap: warning: responsibility disclaim unavailable; permissions attach to the launching app");
         return;
     }
     let set_disclaim: SetDisclaim = unsafe { std::mem::transmute::<*mut c_void, SetDisclaim>(sym) };

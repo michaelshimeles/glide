@@ -46,11 +46,11 @@ unsafe extern "C" {
     fn CFRelease(cf: *const c_void);
 }
 
-/// Record and preview lighter: on by default on Intel Macs. GLIDE_LIGHT=1
-/// turns it on anywhere, GLIDE_LIGHT=0 off.
+/// Record and preview lighter: on by default on Intel Macs. GIMBAL_LIGHT=1
+/// turns it on anywhere, GIMBAL_LIGHT=0 off.
 pub fn light() -> bool {
     static LIGHT: OnceLock<bool> = OnceLock::new();
-    *LIGHT.get_or_init(|| match std::env::var("GLIDE_LIGHT").as_deref() {
+    *LIGHT.get_or_init(|| match std::env::var("GIMBAL_LIGHT").as_deref() {
         Ok("0") => false,
         Ok(_) => true,
         Err(_) => cfg!(target_arch = "x86_64"),

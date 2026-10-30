@@ -28,7 +28,7 @@ pub struct Shot<'a> {
     /// Draw the recent-recordings popover under the title.
     pub recents: bool,
     /// Start view: show a live preview, of the main display ("display") or
-    /// of Glide's synthetic demo screen ("synthetic").
+    /// of DaisyCap's synthetic demo screen ("synthetic").
     pub live: Option<String>,
 }
 
@@ -62,7 +62,7 @@ pub fn render(shot: &Shot, out_file: &Path) -> Result<()> {
         ed.seek(shot.playhead_ms);
     }
     let mut settings = Settings::default();
-    if let Some(dir) = std::env::var_os("GLIDE_OUTPUT_DIR") {
+    if let Some(dir) = std::env::var_os("GIMBAL_OUTPUT_DIR") {
         settings.projects_dir = Some(dir.into());
     }
     let mut devices = Devices::load();

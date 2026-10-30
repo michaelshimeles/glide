@@ -1,6 +1,6 @@
 //! Captions with Whisper (whisper.cpp, Metal): on-device, no Speech
 //! permission needed, word-level timings. Models are downloaded on first
-//! use into `~/Library/Application Support/Glide/models`.
+//! use into `~/Library/Application Support/DaisyCap/models`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,7 +62,7 @@ impl Model {
 
 fn models_dir() -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    home.join("Library/Application Support/Glide/models")
+    home.join("Library/Application Support/DaisyCap/models")
 }
 
 /// The largest model already on disk.
@@ -211,14 +211,14 @@ mod tests {
     }
 
     /// Speech made with macOS `say` comes back as the same words. Skipped
-    /// when the base model hasn't been downloaded (`glide transcribe`).
+    /// when the base model hasn't been downloaded (`daisycap transcribe`).
     #[test]
     fn transcribes_synthesized_speech() {
         if !Model::Base.is_downloaded() {
             eprintln!("Whisper base model not downloaded; skipping");
             return;
         }
-        let dir = std::env::temp_dir().join(format!("glide-whisper-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("daisycap-whisper-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("speech.aiff");
         let ok = std::process::Command::new("say")

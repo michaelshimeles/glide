@@ -25,7 +25,7 @@ impl SpringConfig {
     pub const SCREEN_FOCUSED: Self = Self::new(200.0, 40.0, 2.25);
     /// Screen pan/zoom: slower, more fluid.
     pub const SCREEN_SMOOTH: Self = Self::new(170.0, 50.0, 3.0);
-    /// Cursor glide presets.
+    /// Cursor daisycap presets.
     pub const CURSOR_SMOOTH: Self = Self::new(470.0, 70.0, 3.0);
     pub const CURSOR_MEDIUM: Self = Self::new(340.0, 60.0, 3.0);
     pub const CURSOR_RAPID: Self = Self::new(530.0, 40.0, 1.0);

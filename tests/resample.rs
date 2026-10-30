@@ -1,9 +1,9 @@
 //! Export sharpness: at native size the screen is drawn pixel for pixel, and
 //! downscaled exports filter fine detail instead of aliasing it.
 
-use glide::engine::scene::Scene;
-use glide::project::model::ExportSettings;
-use glide::render::{Gpu, Image, Renderer, VideoFrame};
+use daisycap::engine::scene::Scene;
+use daisycap::project::model::ExportSettings;
+use daisycap::render::{Gpu, Image, Renderer, VideoFrame};
 
 const W: u32 = 640;
 const H: u32 = 400;
@@ -24,8 +24,8 @@ fn checker() -> Vec<u8> {
 /// Render the checkerboard as a bare screen (no padding, corners, shadow,
 /// cursor or zoom) at an export height (0 = native).
 fn render(height: u32) -> Image {
-    let rec = glide::synth::recording(W, H, 1000.0);
-    let mut project = glide::project::new_project("resample", &rec);
+    let rec = daisycap::synth::recording(W, H, 1000.0);
+    let mut project = daisycap::project::new_project("resample", &rec);
     let s = &mut project.style;
     s.padding = 0.0;
     s.corner_radius = 0.0;

@@ -1,5 +1,5 @@
 <script lang="ts">
-	/** Glide's vector cursor (`art.rs`), with its tip at the element's top-left corner. */
+	/** DaisyCap's vector cursor (`art.rs`), with its tip at the element's top-left corner. */
 	let { size = 24 }: { size?: number } = $props();
 </script>
 

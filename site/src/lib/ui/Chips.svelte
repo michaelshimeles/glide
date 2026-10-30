@@ -1,5 +1,5 @@
 <script lang="ts">
-	/** Glide's selectable labels, like the inspector tabs and the Smoothing choices: blue when selected. */
+	/** DaisyCap's selectable labels, like the inspector tabs and the Smoothing choices: blue when selected. */
 	let {
 		items,
 		selected,

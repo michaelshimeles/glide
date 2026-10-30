@@ -650,6 +650,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "daisycap"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "block2 0.6.2",
+ "bytemuck",
+ "clap",
+ "color_quant",
+ "cpal",
+ "dispatch2",
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "gif",
+ "image",
+ "libc",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-av-foundation",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-image 0.3.2",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-foundation 0.3.2",
+ "objc2-io-surface",
+ "objc2-metal 0.3.2",
+ "objc2-metal-performance-shaders",
+ "objc2-quartz-core 0.3.2",
+ "objc2-screen-capture-kit",
+ "pollster",
+ "rfd",
+ "serde",
+ "serde_json",
+ "wgpu",
+ "whisper-rs",
+ "winit",
+]
+
+[[package]]
 name = "dasp_sample"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1031,48 +1073,6 @@ dependencies = [
  "khronos_api",
  "log",
  "xml-rs",
-]
-
-[[package]]
-name = "glide"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "block2 0.6.2",
- "bytemuck",
- "clap",
- "color_quant",
- "cpal",
- "dispatch2",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "gif",
- "image",
- "libc",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-av-foundation",
- "objc2-core-audio-types",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-core-image 0.3.2",
- "objc2-core-media",
- "objc2-core-video",
- "objc2-foundation 0.3.2",
- "objc2-io-surface",
- "objc2-metal 0.3.2",
- "objc2-metal-performance-shaders",
- "objc2-quartz-core 0.3.2",
- "objc2-screen-capture-kit",
- "pollster",
- "rfd",
- "serde",
- "serde_json",
- "wgpu",
- "whisper-rs",
- "winit",
 ]
 
 [[package]]

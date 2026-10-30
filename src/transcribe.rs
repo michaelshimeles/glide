@@ -110,7 +110,7 @@ pub fn transcribe_samples(samples: &[f32]) -> Result<Vec<Word>> {
         return Ok(vec![]);
     }
     authorize()?;
-    let dir = std::env::temp_dir().join(format!("glide-transcribe-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("daisycap-transcribe-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
     let cuts = split_points(samples);
     let mut words = vec![];
@@ -169,7 +169,7 @@ fn authorize() -> Result<()> {
     let status: isize = unsafe { msg_send![cls, authorizationStatus] };
     match status {
         3 => return Ok(()),
-        1 => bail!("Speech Recognition access was denied — enable Glide in System Settings › Privacy & Security › Speech Recognition"),
+        1 => bail!("Speech Recognition access was denied — enable DaisyCap in System Settings › Privacy & Security › Speech Recognition"),
         2 => bail!("Speech Recognition is restricted on this Mac"),
         _ => {}
     }
@@ -178,7 +178,7 @@ fn authorize() -> Result<()> {
         .and_then(|d| d.objectForKey(&ns("NSSpeechRecognitionUsageDescription")))
         .is_some();
     if !has_usage {
-        bail!("Speech Recognition permission can only be requested from Glide.app");
+        bail!("Speech Recognition permission can only be requested from DaisyCap.app");
     }
     let (tx, rx) = mpsc::channel::<isize>();
     let block = RcBlock::new(move |s: isize| {

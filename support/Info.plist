@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>com.heyfabrika.glide</string>
+	<string>com.daisycap.app</string>
 	<key>CFBundleName</key>
-	<string>Glide</string>
+	<string>DaisyCap</string>
 	<key>CFBundleDisplayName</key>
-	<string>Glide</string>
+	<string>DaisyCap</string>
 	<!-- The app menu's About, Hide and Quit items take the executable's name. -->
 	<key>CFBundleExecutable</key>
-	<string>Glide</string>
+	<string>DaisyCap</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
@@ -37,18 +37,18 @@
 	<key>NSCameraReactionEffectGesturesEnabledDefault</key>
 	<false/>
 	<key>NSCameraUsageDescription</key>
-	<string>Glide records your camera into a bubble over your screen recordings.</string>
+	<string>DaisyCap records your camera into a bubble over your screen recordings.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Glide records your microphone for voice-over and captions.</string>
+	<string>DaisyCap records your microphone for voice-over and captions.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Glide records your screen and system audio.</string>
+	<string>DaisyCap records your screen and system audio.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Glide transcribes your microphone on this Mac to create captions.</string>
+	<string>DaisyCap transcribes your microphone on this Mac to create captions.</string>
 	<!-- Sparkle, embedded by scripts/release-macos.sh, checks this feed once a day and installs
-	     only updates signed with the private half of this key, which `generate_keys --account glide`
+	     only updates signed with the private half of this key, which `generate_keys --account daisycap`
 	     keeps in the release Mac's login keychain. Every release must be signed with the same key. -->
 	<key>SUFeedURL</key>
-	<string>https://github.com/michaelshimeles/glide/releases/latest/download/appcast.xml</string>
+	<string>https://github.com/michaelshimeles/daisycap/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>ZqDYrtcARcIrrcFCro5sAEbPJRmKea5dkApvoDVSMgg=</string>
 	<key>SURequireSignedFeed</key>
@@ -61,7 +61,7 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>Glide Project</string>
+			<string>DaisyCap Project</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
@@ -70,7 +70,7 @@
 			<true/>
 			<key>LSItemContentTypes</key>
 			<array>
-				<string>com.heyfabrika.glide.project</string>
+				<string>com.daisycap.app</string>
 			</array>
 		</dict>
 	</array>
@@ -78,9 +78,9 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>com.heyfabrika.glide.project</string>
+			<string>com.daisycap.app</string>
 			<key>UTTypeDescription</key>
-			<string>Glide Project</string>
+			<string>DaisyCap Project</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>com.apple.package</string>
@@ -89,7 +89,7 @@
 			<dict>
 				<key>public.filename-extension</key>
 				<array>
-					<string>glide</string>
+					<string>daisycap</string>
 				</array>
 			</dict>
 		</dict>

@@ -1,6 +1,6 @@
 # Goal: open-source, fast Rust screen recorder with Screen Studio feature parity
 
-Working name: `glide-rs` (you may pick a better original name; never use the trademark "Screen Studio" as the product name).
+Working name: `daisycap-rs` (you may pick a better original name; never use the trademark "Screen Studio" as the product name).
 
 Target bundle for analysis (outside the repo, never commit anything from it): `~/re-targets/screen-studio/Screen Studio.app` (Electron app: `Contents/Resources/app.asar` + `app.asar.unpacked`).
 

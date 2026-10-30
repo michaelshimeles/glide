@@ -57,7 +57,7 @@ pub const PRESETS: &[(&str, &[(u32, u32)])] = &[
     ("Square", &[(800, 800), (1080, 1080), (1280, 1280)]),
 ];
 
-/// Is Glide allowed to control other apps' windows? With `prompt`, macOS
+/// Is DaisyCap allowed to control other apps' windows? With `prompt`, macOS
 /// shows its permission dialog when it isn't.
 pub fn trusted(prompt: bool) -> bool {
     // SAFETY: plain CF/AX calls; the options dictionary is released after use.
@@ -300,7 +300,7 @@ pub fn front_to_back() -> Vec<u32> {
 /// Bring window `id` and its app to the front.
 pub fn raise(id: u32) -> Result<()> {
     if !trusted(true) {
-        bail!("Glide needs Accessibility access to bring windows to the front");
+        bail!("DaisyCap needs Accessibility access to bring windows to the front");
     }
     let (pid, frame) = owner_and_frame(id)?;
     // SAFETY: plain AX calls on elements we hold.
@@ -317,7 +317,7 @@ pub fn raise(id: u32) -> Result<()> {
 /// app actually accepted (apps can enforce minimum/maximum sizes).
 pub fn resize(id: u32, width: f64, height: f64) -> Result<(f64, f64)> {
     if !trusted(true) {
-        bail!("Glide needs Accessibility access to resize windows (System Settings › Privacy & Security › Accessibility)");
+        bail!("DaisyCap needs Accessibility access to resize windows (System Settings › Privacy & Security › Accessibility)");
     }
     let (pid, frame) = owner_and_frame(id)?;
     let (_app, win) = find_ax_window(pid, id, frame).context("couldn't find that window through Accessibility")?;

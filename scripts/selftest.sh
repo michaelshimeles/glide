@@ -6,12 +6,12 @@
 # the audio round trip (also alone with --audio): a tone from
 # another app is recorded, played back in the editor (and heard), and
 # exported. The audio checks play a quiet 1234 Hz tone through the speakers.
-# Outputs go to $GLIDE_TEST_DIR (default ~/Movies/glide-tests), never the repo.
+# Outputs go to $GIMBAL_TEST_DIR (default ~/Movies/daisycap-tests), never the repo.
 set -eu
 cd "$(dirname "$0")/.."
 . scripts/env.sh
-G="$CARGO_TARGET_DIR/release/glide"
-OUT="${GLIDE_TEST_DIR:-$HOME/Movies/glide-tests}/selftest"
+G="$CARGO_TARGET_DIR/release/daisycap"
+OUT="${GIMBAL_TEST_DIR:-$HOME/Movies/daisycap-tests}/selftest"
 rm -rf "$OUT"; mkdir -p "$OUT"
 pass=0; fail=0
 ok() { echo "PASS  $1"; pass=$((pass+1)); }
@@ -22,9 +22,9 @@ cargo build --release -q
 if [ "${1:-}" != "--audio" ]; then
 if cargo test --release -q >"$OUT/tests.log" 2>&1; then ok "cargo test ($(grep -o '[0-9]* passed' "$OUT/tests.log" | awk '{s+=$1} END {print s}') tests)"; else ko "cargo test"; fi
 
-if "$G" synth "$OUT/synth.glide" --duration 6 >"$OUT/synth.log" 2>&1 \
-   && "$G" export "$OUT/synth.glide" -o "$OUT/synth.mp4" >>"$OUT/synth.log" 2>&1 \
-   && "$G" export "$OUT/synth.glide" --format gif -o "$OUT/synth.gif" >>"$OUT/synth.log" 2>&1 \
+if "$G" synth "$OUT/synth.daisycap" --duration 6 >"$OUT/synth.log" 2>&1 \
+   && "$G" export "$OUT/synth.daisycap" -o "$OUT/synth.mp4" >>"$OUT/synth.log" 2>&1 \
+   && "$G" export "$OUT/synth.daisycap" --format gif -o "$OUT/synth.gif" >>"$OUT/synth.log" 2>&1 \
    && [ -s "$OUT/synth.mp4" ] && [ -s "$OUT/synth.gif" ]; then
   ok "synthetic package -> mp4 + gif"
 else
@@ -33,23 +33,23 @@ fi
 
 # Every Background setting (wallpapers, blur, gradient, colour, image) and the
 # padding, roundness and shadow around it must visibly change a rendered frame.
-if "$G" check-background "$OUT/synth.glide" >"$OUT/background.log" 2>&1; then
+if "$G" check-background "$OUT/synth.daisycap" >"$OUT/background.log" 2>&1; then
   ok "background settings change the frame ($(grep -c '^ok' "$OUT/background.log") checks)"
 else
   ko "background settings"
 fi
 
 # iPhone/iPad recordings (no device needed): portrait → phone frame → MP4.
-if "$G" synth "$OUT/phone.glide" --device --duration 3 --width 1180 --height 2556 >"$OUT/phone.log" 2>&1 \
-   && grep -q '"device": "phone"' "$OUT/phone.glide/project.json" \
-   && "$G" export "$OUT/phone.glide" -o "$OUT/phone.mp4" >>"$OUT/phone.log" 2>&1 && [ -s "$OUT/phone.mp4" ]; then
+if "$G" synth "$OUT/phone.daisycap" --device --duration 3 --width 1180 --height 2556 >"$OUT/phone.log" 2>&1 \
+   && grep -q '"device": "phone"' "$OUT/phone.daisycap/project.json" \
+   && "$G" export "$OUT/phone.daisycap" -o "$OUT/phone.mp4" >>"$OUT/phone.log" 2>&1 && [ -s "$OUT/phone.mp4" ]; then
   ok "synthetic iPhone recording -> phone frame + mp4"
 else
   ko "synthetic iPhone recording"
 fi
 
 code=0
-GLIDE_GUI_SELFTEST=1 GLIDE_OUTPUT_DIR="$OUT/gui" "$G" gui >"$OUT/gui.log" 2>&1 || code=$?
+GIMBAL_GUI_SELFTEST=1 GIMBAL_OUTPUT_DIR="$OUT/gui" "$G" gui >"$OUT/gui.log" 2>&1 || code=$?
 echo "exit status $code" >>"$OUT/gui.log"
 if [ "$code" -eq 0 ] && grep -q 'selftest: PASS' "$OUT/gui.log"; then
   ok "gui app ($(grep -o 'elapsed=[0-9.]*s' "$OUT/gui.log"), $(grep -o 'frames: [0-9]*' "$OUT/gui.log"))"
@@ -59,11 +59,11 @@ fi
 fi
 
 # Audio round trip. ScreenCaptureKit only hears apps, and treats every copy
-# of Glide as Glide itself, so the tone comes from a small helper app
-# (scripts/test-window.js under osascript). Glide records it, plays the
-# recording back in the editor (GLIDE_GUI_PLAYTEST, which also checks the
+# of DaisyCap as DaisyCap itself, so the tone comes from a small helper app
+# (scripts/test-window.js under osascript). DaisyCap records it, plays the
+# recording back in the editor (GIMBAL_GUI_PLAYTEST, which also checks the
 # output follows the volume, mute and playhead) while a second recording
-# listens, and exports it. `glide audio-check` looks for the tone each time.
+# listens, and exports it. `daisycap audio-check` looks for the tone each time.
 helper() { osascript -l JavaScript scripts/test-window.js "$@" >/dev/null 2>&1; }
 capturing() { # name pid — wait until the recording is running
   i=0
@@ -86,27 +86,27 @@ record_with_tone() { # name [record options...] — 7 s; the helper plays the to
 tone() { grep "^$1" "$2" | sed 's/.*Hz tone/tone/'; }
 if [ "${1:-}" = "--screen" ] || [ "${1:-}" = "--audio" ]; then
   if "$G" permissions 2>/dev/null | grep -q 'Screen Recording: *Granted'; then
-    "$G" synth "$OUT/tone-source.glide" --duration 8 --width 640 --height 400 --tone 1234 >/dev/null 2>&1
-    TONE="$OUT/tone-source.glide/recording/system.wav"
+    "$G" synth "$OUT/tone-source.daisycap" --duration 8 --width 640 --height 400 --tone 1234 >/dev/null 2>&1
+    TONE="$OUT/tone-source.daisycap/recording/system.wav"
     if record_with_tone tone --area 0,0,320,200 \
-       && "$G" audio-check --freq 1234 "$OUT/tone.glide" --require system >"$OUT/tone-check.log" 2>&1; then
+       && "$G" audio-check --freq 1234 "$OUT/tone.daisycap" --require system >"$OUT/tone-check.log" 2>&1; then
       ok "records another app's tone (system audio): $(tone system "$OUT/tone-check.log")"
     else
       ko "recording a tone"
     fi
-    # Glide plays the recording; a second recording (started first) listens.
+    # DaisyCap plays the recording; a second recording (started first) listens.
     "$G" record -t 10 --dir "$OUT" --name heard --area 0,0,320,200 >"$OUT/heard-record.log" 2>&1 &
     rpid=$!
     capturing heard "$rpid"
-    GLIDE_GUI_PLAYTEST="$OUT/tone.glide" GLIDE_PLAYTEST_SECONDS=6 GLIDE_OUTPUT_DIR="$OUT/gui" "$G" gui >"$OUT/playtest.log" 2>&1 || true
+    GIMBAL_GUI_PLAYTEST="$OUT/tone.daisycap" GIMBAL_PLAYTEST_SECONDS=6 GIMBAL_OUTPUT_DIR="$OUT/gui" "$G" gui >"$OUT/playtest.log" 2>&1 || true
     wait "$rpid"
     if grep -q 'playtest: PASS' "$OUT/playtest.log" \
-       && "$G" audio-check --freq 1234 "$OUT/heard.glide" --require system >"$OUT/heard-check.log" 2>&1; then
+       && "$G" audio-check --freq 1234 "$OUT/heard.daisycap" --require system >"$OUT/heard-check.log" 2>&1; then
       ok "editor playback is audible: $(tone system "$OUT/heard-check.log"); $(grep -o 'volume x0.25.*soundtrack' "$OUT/playtest.log")"
     else
       ko "editor playback of the recorded tone"
     fi
-    if "$G" export "$OUT/tone.glide" -o "$OUT/tone.mp4" >"$OUT/tone-export.log" 2>&1 \
+    if "$G" export "$OUT/tone.daisycap" -o "$OUT/tone.mp4" >"$OUT/tone-export.log" 2>&1 \
        && "$G" audio-check --freq 1234 "$OUT/tone.mp4" --require audio0 >>"$OUT/tone-export.log" 2>&1; then
       ok "export carries the tone: $(tone audio0 "$OUT/tone-export.log")"
     else
@@ -117,11 +117,11 @@ if [ "${1:-}" = "--screen" ] || [ "${1:-}" = "--audio" ]; then
     helper 40 &
     wpid=$!
     sleep 1.5
-    win=$("$G" devices 2>/dev/null | grep 'Glide audio test (' | grep -v '(sound)' | awk 'NR==1 {print $1}')
+    win=$("$G" devices 2>/dev/null | grep 'DaisyCap audio test (' | grep -v '(sound)' | awk 'NR==1 {print $1}')
     if [ -z "$win" ]; then
       echo "SKIP  window recording audio (helper window didn't appear)"
     elif record_with_tone window-tone --window "$win" \
-       && "$G" audio-check --freq 1234 "$OUT/window-tone.glide" --require system >"$OUT/window-check.log" 2>&1; then
+       && "$G" audio-check --freq 1234 "$OUT/window-tone.daisycap" --require system >"$OUT/window-check.log" 2>&1; then
       ok "window recording hears other apps: $(tone system "$OUT/window-check.log")"
     else
       ko "window recording audio"
@@ -131,8 +131,8 @@ if [ "${1:-}" = "--screen" ] || [ "${1:-}" = "--audio" ]; then
     # closed or headphones are in, so that part is reported, not required.
     if "$G" permissions 2>/dev/null | grep -q 'Microphone: *Granted'; then
       if record_with_tone mic-tone --area 0,0,320,200 --mic --no-system-audio \
-         && "$G" audio-check --freq 1234 "$OUT/mic-tone.glide" >"$OUT/mic-check.log" 2>&1 && grep -q '^mic: .*dBFS RMS' "$OUT/mic-check.log"; then
-        if "$G" audio-check --freq 1234 "$OUT/mic-tone.glide" --require mic >/dev/null 2>&1; then
+         && "$G" audio-check --freq 1234 "$OUT/mic-tone.daisycap" >"$OUT/mic-check.log" 2>&1 && grep -q '^mic: .*dBFS RMS' "$OUT/mic-check.log"; then
+        if "$G" audio-check --freq 1234 "$OUT/mic-tone.daisycap" --require mic >/dev/null 2>&1; then
           ok "microphone recorded the tone from the speakers: $(tone mic "$OUT/mic-check.log")"
         else
           ok "microphone recorded, without hearing the speakers (lid closed or headphones?): $(grep '^mic' "$OUT/mic-check.log" | cut -d';' -f1)"
@@ -150,21 +150,21 @@ fi
 
 if [ "${1:-}" = "--screen" ]; then
   if "$G" record -t 3 --dir "$OUT" --name screen >"$OUT/screen.log" 2>&1 \
-     && "$G" export "$OUT/screen.glide" -o "$OUT/screen.mp4" >>"$OUT/screen.log" 2>&1 \
+     && "$G" export "$OUT/screen.daisycap" -o "$OUT/screen.mp4" >>"$OUT/screen.log" 2>&1 \
      && [ -s "$OUT/screen.mp4" ]; then
     ok "real display recording -> export"
   else
     ko "real display recording (Screen Recording permission?)"
   fi
-  if [ -d "$OUT/screen.glide" ] && "$G" check-background "$OUT/screen.glide" >"$OUT/screen-background.log" 2>&1; then
+  if [ -d "$OUT/screen.daisycap" ] && "$G" check-background "$OUT/screen.daisycap" >"$OUT/screen-background.log" 2>&1; then
     ok "background settings on the real recording ($(grep -c '^ok' "$OUT/screen-background.log") checks)"
   else
     ko "background settings on the real recording"
   fi
-  # Resize Glide's own window (only that exact window, by its process) through the
+  # Resize DaisyCap's own window (only that exact window, by its process) through the
   # Accessibility API, as the Window source's Resize menu does.
   if "$G" permissions 2>/dev/null | grep -q 'Accessibility: *Authorized'; then
-    GLIDE_OUTPUT_DIR="$OUT/gui" "$G" gui >"$OUT/resize.log" 2>&1 &
+    GIMBAL_OUTPUT_DIR="$OUT/gui" "$G" gui >"$OUT/resize.log" 2>&1 &
     gpid=$!
     # Find its window by process id (CoreGraphics; no ScreenCaptureKit).
     resized=""

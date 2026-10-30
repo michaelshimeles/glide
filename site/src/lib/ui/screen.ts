@@ -1,5 +1,5 @@
 /**
- * The recorded screen: the synthetic dashboard that `glide synth` draws, laid out at 960×600.
+ * The recorded screen: the synthetic dashboard that `daisycap synth` draws, laid out at 960×600.
  * Cursor paths aim at its buttons, so their positions live here.
  */
 export const SCREEN = { w: 960, h: 600 };
