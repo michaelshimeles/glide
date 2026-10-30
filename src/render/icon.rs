@@ -1,6 +1,7 @@
-//! The Glide app icon, drawn procedurally with signed distance fields: a
+//! The DaisyCap app icon, drawn procedurally with signed distance fields: a
 //! rounded tile in a graphite-to-black gradient, a white cursor gliding in on
-//! a tapered motion swoosh, and a small red record dot. Rendered at any size
+//! a tapered motion swoosh, and a daisy — petal ring around an amber core with
+//! a red record dot at its heart, after the app's name. Rendered at any size
 //! so the .icns gets crisp pixels at every resolution.
 
 type V = [f32; 2];
@@ -101,6 +102,23 @@ fn tapered(p: V, a: V, b: V, c: V, r0: f32, r1: f32) -> (f32, f32) {
     best
 }
 
+/// Distance to a daisy and to its core: petals are ellipses laid on a ring with
+/// their long axis pointing outward, unioned with a plain min. `rot` turns the
+/// flower. Exact ellipse distance isn't needed — a scaled-circle approximation
+/// is accurate enough for one pixel of anti-aliasing.
+fn daisy(p: V, c: V, petals: u32, rr: f32, pr: f32, rot: f32) -> (f32, f32) {
+    let q = sub(p, c);
+    let mut d = f32::MAX;
+    for i in 0..petals {
+        let a = rot + i as f32 * std::f32::consts::TAU / petals as f32;
+        let (s, k) = (a.sin(), a.cos());
+        let l = [q[0] * k + q[1] * s, -q[0] * s + q[1] * k];
+        let e = [(l[0] - rr) / (pr * 1.5), l[1] / (pr * 0.85)];
+        d = d.min((len(e) - 1.0) * pr * 0.85);
+    }
+    (d, len(q) - rr * 0.46)
+}
+
 /// Render the icon at `size`×`size` (RGBA8, straight alpha).
 pub fn render(size: u32) -> Vec<u8> {
     let px = 1.0 / size as f32;
@@ -119,8 +137,11 @@ pub fn render(size: u32) -> Vec<u8> {
     // Trail: a gentle dip from the lower right, thin, rising into the
     // cursor's tail, full.
     let (t0, t1, t2) = ([0.85, 0.7], [0.7, 0.8], [0.49, 0.62]);
-    let dot_c = [0.705, 0.31];
-    let dot_r = 0.05;
+    // The subject: a daisy — petals around an amber core. Petals are ellipses
+    // whose long axis is 1.5 x `dai_pr`, so the ring is their tip radius.
+    let dai_c = [0.706, 0.366];
+    let (dai_n, dai_ring, dai_pr) = (8_u32, 0.105_f32, 0.040_f32);
+    let dai_out = dai_ring + dai_pr * 1.5;
 
     let mut out = vec![0u8; (size * size * 4) as usize];
     for y in 0..size {
@@ -158,11 +179,17 @@ pub fn render(size: u32) -> Vec<u8> {
                 let shade = ((p[1] - tip[1]) / (0.86 * scale)).clamp(0.0, 1.0);
                 c.over(mix([1.0; 3], hex(0xe4e6eb), shade), aa(d_arrow) * inside);
 
-                // Record dot: a soft red glow, then the dot, lit from above.
-                let d_dot = circle(p, dot_c, dot_r);
-                c.over(hex(0xff3b30), inside * 0.28 * (1.0 - smoothstep(-0.01, 0.045, d_dot)));
-                let lit = ((p[1] - (dot_c[1] - dot_r)) / (2.0 * dot_r)).clamp(0.0, 1.0);
-                c.over(mix(hex(0xff6a5f), hex(0xe5241b), lit), aa(d_dot) * inside);
+                // Daisy: white petals around an amber core, a red record dot at
+                // its heart, and a soft round bloom behind the whole flower.
+                let (d_pet, d_core) = daisy(p, dai_c, dai_n, dai_ring, dai_pr, -1.5708);
+                let rr = len(sub(p, dai_c));
+                c.over(hex(0xffcf8a), inside * 0.13 * (1.0 - smoothstep(dai_out * 0.9, dai_out * 1.3, rr)));
+                let tip = ((rr - dai_ring * 0.45) / (dai_out - dai_ring * 0.45)).clamp(0.0, 1.0);
+                c.over(mix(hex(0xdde2ea), hex(0xffffff), tip), aa(d_pet) * inside);
+                let cr = dai_ring * 0.46;
+                let lit = ((p[1] - (dai_c[1] - cr)) / (2.0 * cr)).clamp(0.0, 1.0);
+                c.over(mix(hex(0xffd166), hex(0xef9c1e), lit), aa(d_core) * inside);
+                c.over(hex(0xff3b30), aa(circle(p, dai_c, 0.024)) * inside);
             }
 
             let i = ((y * size + x) * 4) as usize;
