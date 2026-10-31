@@ -78,7 +78,8 @@ Milestones and parity track the checklist in `analysis/SCREEN_STUDIO.md`.
   (every click and key flavour finite, unique and deterministic, keys
   distinct per key code), click/key/whoosh placement under cuts and speed,
   the daisy watermark drawing only the corner, plus a
-  headless UI smoke test driving every editor panel and background tests
+  headless UI smoke test driving every editor panel, the Pro toolbox
+  opening on hover and closing when the pointer leaves, and background tests
   that edit each Background setting through the editor, read the preview's
   pixels back and compare them (and the exported frame) before and after,
   and audio tests (track levels and the silence note, the playback mix

@@ -84,6 +84,8 @@ fn toolbox(ui: &mut Ui, badge: &Response) {
     }
     ui.ctx().memory_mut(|m| m.data.insert_temp(id, open));
     ui.ctx().memory_mut(|m| m.data.insert_temp(id.with("armed"), armed));
+    // A well-known flag, so headless checks can see the toolbox open.
+    ui.ctx().memory_mut(|m| m.data.insert_temp(egui::Id::new("pro-toolbox-open"), open));
 }
 
 fn content(ui: &mut Ui) {

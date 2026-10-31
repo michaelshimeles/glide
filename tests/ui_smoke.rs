@@ -9,10 +9,11 @@ use daisycap::app::editor::{Editor, Selection, Tab};
 use daisycap::app::home::{self, Devices, Settings, Thumbs};
 use daisycap::render::Gpu;
 
-fn frame(ctx: &egui::Context, t: f64, f: impl FnMut(&mut egui::Ui)) {
+fn frame(ctx: &egui::Context, t: f64, pos: Option<egui::Pos2>, f: impl FnMut(&mut egui::Ui)) {
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1320.0, 840.0))),
         time: Some(t),
+        events: pos.map_or_else(Vec::new, |p| vec![egui::Event::PointerMoved(p)]),
         ..Default::default()
     };
     let mut out = ctx.run_ui(input, f);
@@ -44,8 +45,8 @@ fn editor_and_home_render_every_panel() {
     // The editor's frame: its title bar draws Back, the title (recents) and
     // the record controls from the app's settings.
     let mut actions = vec![];
-    let mut editor_frame = |ed: &mut Editor, t: f64| {
-        frame(&ctx, t, |ui| {
+    let mut editor_frame = |ed: &mut Editor, t: f64, pos: Option<egui::Pos2>| {
+        frame(&ctx, t, pos, |ui| {
             let mut chrome = home::Chrome { settings: &mut settings, devices: &mut devices, projects: &projects, thumbs: &mut thumbs, action: home::Action::None };
             ed.ui(ui, &mut renderer, &mut chrome);
             if !matches!(chrome.action, home::Action::None) {
@@ -57,7 +58,7 @@ fn editor_and_home_render_every_panel() {
         ed.tab = tab;
         for _ in 0..2 {
             t += 0.016;
-            editor_frame(&mut ed, t);
+            editor_frame(&mut ed, t, None);
         }
     }
     // Selections show their own inspector panels.
@@ -66,7 +67,7 @@ fn editor_and_home_render_every_panel() {
     for sel in [Selection::Slice(slice), zoom.map_or(Selection::None, Selection::Zoom)] {
         ed.selection = sel;
         t += 0.016;
-        editor_frame(&mut ed, t);
+        editor_frame(&mut ed, t, None);
     }
     // Edits: split, add a zoom, undo/redo.
     ed.seek(1500.0);
@@ -93,7 +94,7 @@ fn editor_and_home_render_every_panel() {
     // The export sheet renders.
     ed.export.open = true;
     t += 0.016;
-    editor_frame(&mut ed, t);
+    editor_frame(&mut ed, t, None);
     ed.export.open = false;
 
     // A blur over the first sidebar item: the synthetic UI moves the
@@ -116,13 +117,41 @@ fn editor_and_home_render_every_panel() {
     assert!((found[0].start - 1500.0).abs() <= 100.0 && found[0].end >= 2800.0, "{found:?}");
     assert!(daisycap::app::timeline::extra_height(&ed) > 0.0);
     t += 0.016;
-    editor_frame(&mut ed, t);
+    editor_frame(&mut ed, t, None);
     ed.cut_exposure(found[0]);
     assert!(ed.project.timeline.slices.iter().all(|s| s.end <= found[0].start || s.start >= found[0].end), "{:?}", ed.project.timeline.slices);
     assert_eq!(daisycap::app::timeline::extra_height(&ed), 0.0);
     t += 0.016;
-    editor_frame(&mut ed, t);
+    editor_frame(&mut ed, t, None);
     ed.save();
+
+    // The Pro badge opens its toolbox on hover (and closing on leave); the
+    // badge sits in the Background tab's Watermark row.
+    ed.selection = Selection::None;
+    ed.tab = Tab::Background;
+    t += 0.016;
+    editor_frame(&mut ed, t, None);
+    let tooltip = egui::Id::new("pro-toolbox-open");
+    let mut opened = false;
+    'sweep: for xi in -3..=3 {
+        for yi in -3..=3 {
+            let at = egui::pos2(1105.0 + xi as f32 * 12.0, 345.0 + yi as f32 * 10.0);
+            for _ in 0..2 {
+                t += 0.016;
+                editor_frame(&mut ed, t, Some(at));
+            }
+            if ctx.memory(|m| m.data.get_temp::<bool>(tooltip)) == Some(true) {
+                opened = true;
+                break 'sweep;
+            }
+        }
+    }
+    assert!(opened, "the Pro badge never showed its toolbox");
+    for _ in 0..2 {
+        t += 0.016;
+        editor_frame(&mut ed, t, Some(egui::pos2(1105.0, 560.0)));
+    }
+    assert_ne!(ctx.memory(|m| m.data.get_temp::<bool>(tooltip)), Some(true), "the toolbox stayed open after the pointer left");
     drop(editor_frame);
     assert!(actions.is_empty(), "no title-bar button was pressed: {actions:?}");
     let root = ed.package.root.clone();
@@ -149,14 +178,14 @@ fn editor_and_home_render_every_panel() {
         };
         for _ in 0..2 {
             t += 0.016;
-            frame(&ctx, t, |ui| {
+            frame(&ctx, t, None, |ui| {
                 let a = home::start_view(ui, &mut settings, &mut devices, &projects, &mut thumbs, Some("permission note"), &live);
                 assert!(matches!(a, home::Action::None));
             });
         }
     }
     t += 0.016;
-    frame(&ctx, t, |ui| {
+    frame(&ctx, t, None, |ui| {
         let a = home::recents(ui, &projects, &mut thumbs, Some(&root), &dir);
         assert!(matches!(a, home::Action::None));
     });
