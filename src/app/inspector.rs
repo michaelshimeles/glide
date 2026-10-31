@@ -3,6 +3,7 @@
 use egui::{Color32, CornerRadius, RichText, Sense, Stroke, Ui, vec2};
 
 use super::editor::{Deferred, Editor, Selection, Tab};
+use super::pro;
 use super::theme::{self, pal};
 use super::widgets::{self, caption, row, section, segmented, slider, toggle_row};
 use crate::engine::geom::v2;
@@ -31,7 +32,10 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                 tabs(ui, &mut ed.tab);
                 match ed.tab {
                     Tab::Background => background(ui, ed, &mut draft),
-                    Tab::Cursor => cursor(ui, &mut draft, ed.rec.mouse.is_empty()),
+                    Tab::Cursor => {
+                        let no_data = ed.rec.mouse.is_empty();
+                        cursor(ui, ed, &mut draft, no_data);
+                    }
                     Tab::Camera => camera(ui, &mut draft, ed.rec.meta.camera.is_some()),
                     Tab::Captions => captions(ui, ed, &mut draft),
                     Tab::Audio => audio(ui, ed, &mut draft),
@@ -204,6 +208,10 @@ fn background(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
             slider(ui, "Blur", &mut s.background_blur, 0.0..=60.0, " px");
         }
     });
+    section(ui, "Watermark", |ui| {
+        pro::toggle_row(ui, "Daisy mark", &mut s.watermark);
+        caption(ui, "Shown in the bottom-left corner of the export.");
+    });
     section(ui, "Frame", |ui| {
         slider(ui, "Padding", &mut s.padding, 0.0..=40.0, "%");
         row(ui, "Device", |ui| {
@@ -275,7 +283,7 @@ fn spring_picker(ui: &mut Ui, label: &str, cfg: &mut Option<SpringConfig>, prese
     }
 }
 
-fn cursor(ui: &mut Ui, d: &mut Project, no_data: bool) {
+fn cursor(ui: &mut Ui, ed: &mut Editor, d: &mut Project, no_data: bool) {
     let c = &mut d.style.cursor;
     if no_data {
         caption(ui, "This recording has no cursor data.");
@@ -340,9 +348,27 @@ fn cursor(ui: &mut Ui, d: &mut Project, no_data: bool) {
         }
         toggle_row(ui, "Click sounds", &mut d.style.audio.click_sounds);
         if d.style.audio.click_sounds {
+            let mut audition = false;
+            row(ui, "Sound", |ui| {
+                audition = widgets::icon_button(ui, widgets::Icon::Play, true).clicked();
+                egui::ComboBox::from_id_salt("click-sound").selected_text(d.style.audio.click_sound.label()).show_ui(ui, |ui| {
+                    for s in ClickSound::ALL {
+                        ui.selectable_value(&mut d.style.audio.click_sound, s, s.label());
+                    }
+                });
+            });
+            if audition {
+                play_to_editor(ed, &crate::export::audio::click_sound(d.style.audio.click_sound), d.style.audio.click_volume);
+            }
             slider(ui, "Click volume", &mut d.style.audio.click_volume, 0.0..=1.0, "");
         }
     });
+}
+
+/// Audition `sound` through the editor's output at `gain`.
+fn play_to_editor(ed: &mut Editor, sound: &[[f32; 2]], gain: f64) {
+    let g = gain as f32;
+    ed.audio.play_oneshot(sound.iter().map(|v| [v[0] * g, v[1] * g]).collect());
 }
 
 fn camera(ui: &mut Ui, d: &mut Project, has: bool) {
@@ -511,6 +537,71 @@ fn audio(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
             caption(ui, &std::path::Path::new(m).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
             slider(ui, "Music volume", &mut a.music_volume, 0.0..=1.0, "");
         }
+    });
+    section(ui, "Sound mood", |ui| {
+        ui.horizontal(|ui| {
+            for (i, name) in ["Minimal", "Office", "Mech keeb"].iter().enumerate() {
+                if ui.button(*name).on_hover_text("Set the click and keyboard sounds at once").clicked() {
+                    match i {
+                        0 => {
+                            a.click_sounds = false;
+                            a.key_sounds = true;
+                            a.key_sound = KeySound::Soft;
+                            a.key_volume = 0.15;
+                        }
+                        1 => {
+                            a.click_sounds = true;
+                            a.click_sound = ClickSound::Soft;
+                            a.click_volume = 0.18;
+                            a.key_sounds = true;
+                            a.key_sound = KeySound::Soft;
+                            a.key_volume = 0.15;
+                        }
+                        _ => {
+                            a.click_sounds = true;
+                            a.click_sound = ClickSound::Thock;
+                            a.click_volume = 0.3;
+                            a.key_sounds = true;
+                            a.key_sound = KeySound::Mech;
+                            a.key_volume = 0.32;
+                            if d.style.cursor.click_effect == ClickEffect::None {
+                                d.style.cursor.click_effect = ClickEffect::Circle;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    });
+    section(ui, "Keyboard", |ui| {
+        toggle_row(ui, "Key sounds", &mut a.key_sounds);
+        if a.key_sounds {
+            let mut audition = false;
+            row(ui, "Sound", |ui| {
+                audition = widgets::icon_button(ui, widgets::Icon::Play, true).clicked();
+                egui::ComboBox::from_id_salt("key-sound").selected_text(a.key_sound.label()).show_ui(ui, |ui| {
+                    for s in KeySound::ALL {
+                        ui.selectable_value(&mut a.key_sound, s, s.label());
+                    }
+                });
+            });
+            if audition {
+                play_to_editor(ed, &crate::export::audio::key_sound(a.key_sound, 8), a.key_volume);
+            }
+            slider(ui, "Key volume", &mut a.key_volume, 0.0..=1.0, "");
+            toggle_row(ui, "Typing only", &mut a.key_typing_only);
+            caption(ui, "Skips ⌘/⌃ shortcuts, so only typing clacks. Space and Return land heavier.");
+        }
+        if ed.rec.keys.is_empty() {
+            caption(ui, "No key presses in this recording. They're recorded by default; switch on \"Record key presses\" in the Record options.");
+        }
+    });
+    section(ui, "Zoom whoosh", |ui| {
+        toggle_row(ui, "Whoosh", &mut a.zoom_whoosh);
+        if a.zoom_whoosh {
+            slider(ui, "Whoosh volume", &mut a.whoosh_volume, 0.0..=1.0, "");
+        }
+        caption(ui, "A soft sweep when a zoom starts.");
     });
     section(ui, "Voice-over", |ui| {
         match ed.voice.as_ref().map(|v| v.elapsed()) {

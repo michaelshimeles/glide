@@ -121,6 +121,7 @@ enum TexId {
     Camera,
     Background,
     Layer,
+    Watermark,
     Cursor(u32),
     Text(u64),
 }
@@ -245,6 +246,9 @@ impl Renderer {
             fast_sampling: false,
         };
         r.upload(TexId::Dummy, &Image { width: 1, height: 1, rgba: vec![0, 0, 0, 0] }, false);
+        // The daisy mark for the video watermark (drawn at any output size).
+        let m = icon::render_mark(256);
+        r.upload(TexId::Watermark, &Image { width: 256, height: 256, rgba: m }.premultiply(), true);
         r
     }
 
@@ -649,6 +653,20 @@ impl Renderer {
             if let Some(cam) = &frame.camera_full {
                 main.push((camera_draw(cam, size, false), TexId::Camera));
             }
+        }
+
+        // DaisyCap's daisy mark, bottom-left of the frame.
+        if style.watermark
+            && let Some(t) = self.textures.get(&TexId::Watermark)
+            && t.size.0 > 1
+        {
+            let hgt = 58.0 * k;
+            let wid = hgt * t.size.0 as f64 / t.size.1 as f64;
+            let margin = 34.0 * k;
+            let rect = Rect::new(margin, size.y - margin - hgt, wid, hgt);
+            let mut d = Draw::new(MODE_TEXTURE, rect, size);
+            d.p0[3] = 0.92;
+            main.push((d, TexId::Watermark));
         }
 
         // Text overlays.

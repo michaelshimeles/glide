@@ -11,6 +11,7 @@ pub mod inspector;
 pub mod macos;
 pub mod menubar;
 pub mod player;
+pub mod pro;
 pub mod preview;
 pub mod snapshot;
 pub mod theme;

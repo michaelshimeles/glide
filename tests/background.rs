@@ -95,9 +95,34 @@ fn background_edits_at_zero_padding_bring_it_into_view() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn watermark_draws_in_the_bottom_left_corner() {
+    let (dir, mut ed) = editor("watermark");
+    assert!(ed.project.style.watermark, "the mark is on by default");
+    let on = draw(&mut ed, SIZE);
+    let mut s = ed.project.style.clone();
+    s.watermark = false;
+    let off = show(&mut ed, &s);
+    let (w, h) = SIZE;
+    let (mut inside, mut outside) = (0usize, 0usize);
+    for (i, (a, b)) in on.rgba.chunks_exact(4).zip(off.rgba.chunks_exact(4)).enumerate() {
+        if (0..3).any(|c| a[c].abs_diff(b[c]) > 2) {
+            let (x, y) = (i as u32 % w, i as u32 / w);
+            if x < w / 3 && y > h / 2 {
+                inside += 1;
+            } else {
+                outside += 1;
+            }
+        }
+    }
+    assert!(inside > 100, "the mark draws in the corner ({inside} px)");
+    assert_eq!(outside, 0, "{outside} px changed away from the corner");
+    drop(ed);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Export the first frame of the project and decode it back.
-fn export_frame(ed: &Editor, dir: &Path, name: &str) -> Image {
-    let settings = ExportSettings { height: 400, fps: 10, quality: Quality::Studio, ..Default::default() };
+fn export_frame(ed: &Editor, dir: &Path, name: &str) -> Image {    let settings = ExportSettings { height: 400, fps: 10, quality: Quality::Studio, ..Default::default() };
     let output = dir.join(format!("{name}.mp4"));
     let job = Job { project: ed.project.clone(), recording: ed.rec.clone(), source: Source::Package(ed.package.root.clone()), settings, output: output.clone() };
     export::run(&job, &mut |_| {}, &AtomicBool::new(false)).unwrap();

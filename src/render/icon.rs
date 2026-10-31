@@ -204,6 +204,49 @@ pub fn render(size: u32) -> Vec<u8> {
     out
 }
 
+/// Render the daisy mark alone (no tile), centred with a soft shadow, RGBA8
+/// straight alpha: the video watermark.
+pub fn render_mark(size: u32) -> Vec<u8> {
+    let px = 1.0 / size as f32;
+    let aa = |d: f32| (0.5 - d / px).clamp(0.0, 1.0);
+    let c = [0.5, 0.5];
+    // The flower fills ~86% of the canvas (the icon's ring-to-petal ratio).
+    let (ring0, pr0) = (0.105_f32, 0.040_f32);
+    let k = 0.43 / (ring0 + pr0 * 1.5);
+    let (ring, pr) = (ring0 * k, pr0 * k);
+    let out_r = ring + pr * 1.5;
+    let mut out = vec![0u8; (size * size * 4) as usize];
+    for y in 0..size {
+        for x in 0..size {
+            let p = [(x as f32 + 0.5) * px, (y as f32 + 0.5) * px];
+            let mut cpx = Px([0.0; 4]);
+            // A soft drop shadow down-right keeps the mark readable on light
+            // backgrounds.
+            let s = [p[0] - 0.008, p[1] - 0.016];
+            let (d_pet_s, d_core_s) = daisy(s, c, 8, ring, pr, -1.5708);
+            cpx.over([0.0; 3], smoothstep(0.02, -0.01, d_pet_s.min(d_core_s)) * 0.3);
+            let (d_pet, d_core) = daisy(p, c, 8, ring, pr, -1.5708);
+            let rr = len(sub(p, c));
+            // The soft amber bloom behind the flower.
+            cpx.over(hex(0xffcf8a), 0.16 * (1.0 - smoothstep(out_r * 0.85, out_r * 1.25, rr)));
+            let tip = ((rr - ring * 0.45) / (out_r - ring * 0.45)).clamp(0.0, 1.0);
+            cpx.over(mix(hex(0xdde2ea), hex(0xffffff), tip), aa(d_pet));
+            let cr = ring * 0.46;
+            let lit = ((p[1] - (c[1] - cr)) / (2.0 * cr)).clamp(0.0, 1.0);
+            cpx.over(mix(hex(0xffd166), hex(0xef9c1e), lit), aa(d_core));
+            cpx.over(hex(0xff3b30), aa(circle(p, c, ring * 0.2285)));
+            let i = ((y * size + x) * 4) as usize;
+            let a = cpx.0[3];
+            for j in 0..3 {
+                let v = if a > 0.0 { cpx.0[j] / a } else { 0.0 };
+                out[i + j] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+            out[i + 3] = (a.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    }
+    out
+}
+
 /// Write a macOS `.iconset` folder (all sizes Apple's iconutil expects).
 pub fn write_iconset(dir: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -239,10 +282,22 @@ mod tests {
         }
     }
 
+    /// The watermark mark: a flower on transparent corners, nothing outside
+    /// the canvas edge.
+    #[test]
+    fn mark_is_a_flower_on_transparent_corners() {
+        let s = 128;
+        let px = super::render_mark(s);
+        let at = |x: u32, y: u32| px[((y * s + x) * 4 + 3) as usize];
+        assert_eq!(at(2, 2), 0, "corner is clear");
+        assert_eq!(at(s - 3, s - 3), 0, "far corner is clear");
+        assert!(at(s / 2, s / 2) > 200, "the amber core is opaque");
+        assert!(at(s / 2, s / 5) > 100, "a petal reaches up");
+    }
+
     /// Graphite, white and a red dot: nothing purple (or blue-violet).
     #[test]
-    fn icon_has_no_purple() {
-        let px = super::render(256);
+    fn icon_has_no_purple() {        let px = super::render(256);
         let purple = px
             .chunks_exact(4)
             .filter(|p| p[3] > 32)

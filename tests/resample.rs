@@ -22,7 +22,7 @@ fn checker() -> Vec<u8> {
 }
 
 /// Render the checkerboard as a bare screen (no padding, corners, shadow,
-/// cursor or zoom) at an export height (0 = native).
+/// cursor, zoom or watermark) at an export height (0 = native).
 fn render(height: u32) -> Image {
     let rec = daisycap::synth::recording(W, H, 1000.0);
     let mut project = daisycap::project::new_project("resample", &rec);
@@ -31,6 +31,7 @@ fn render(height: u32) -> Image {
     s.corner_radius = 0.0;
     s.shadow.intensity = 0.0;
     s.cursor.hide = true;
+    s.watermark = false;
     project.timeline.zooms.clear();
     let mut scene = Scene::new(project.clone(), &rec, 60.0);
     let (_, h) = scene.sizes.render_size(height);
