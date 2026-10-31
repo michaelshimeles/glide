@@ -55,8 +55,8 @@ fn sanitize(name: &str) -> Result<String> {
     Ok(n)
 }
 
-/// Save `style` as a preset. A background image stored inside the package
-/// (`package_dir`) is copied next to the preset so it works in any project.
+/// Save `style` as a preset. A background image or music file stored inside the
+/// package (`package_dir`) is copied next to the preset so it works in any project.
 pub fn save_in(dir: &Path, name: &str, style: &Style, package_dir: Option<&Path>) -> Result<Preset> {
     let name = sanitize(name)?;
     std::fs::create_dir_all(dir)?;
@@ -71,6 +71,17 @@ pub fn save_in(dir: &Path, name: &str, style: &Style, package_dir: Option<&Path>
         std::fs::create_dir_all(dst.parent().unwrap())?;
         std::fs::copy(&src, &dst)?;
         *path = dst.to_string_lossy().into_owned();
+    }
+    if let Some(music) = &mut style.audio.music
+        && Path::new(music.as_str()).is_relative()
+        && let Some(pkg) = package_dir
+    {
+        let src = pkg.join(music.as_str());
+        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("mp3").to_string();
+        let dst = dir.join("assets").join(format!("{name}-music.{ext}"));
+        std::fs::create_dir_all(dst.parent().unwrap())?;
+        std::fs::copy(&src, &dst)?;
+        *music = dst.to_string_lossy().into_owned();
     }
     let path = dir.join(format!("{name}.json"));
     write_json(&path, &style)?;
@@ -159,6 +170,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn a_relative_music_file_is_copied_next_to_the_preset() {
+        let root = std::env::temp_dir().join(format!("glide-preset-music-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (pkg, presets) = (root.join("Demo.glide"), root.join("presets"));
+        std::fs::create_dir_all(pkg.join("assets")).unwrap();
+        std::fs::write(pkg.join("assets/music-1.mp3"), b"tune").unwrap();
+        let mut style = Style::default();
+        style.audio.music = Some("assets/music-1.mp3".into());
+        let preset = save_in(&presets, "Calm", &style, Some(&pkg)).unwrap();
+        let saved = load(&preset).unwrap().audio.music.unwrap();
+        assert_eq!(Path::new(&saved), presets.join("assets/Calm-music.mp3"));
+        assert_eq!(std::fs::read(&saved).unwrap(), b"tune");
+        assert_eq!(style.audio.music.as_deref(), Some("assets/music-1.mp3"), "the project keeps its relative path");
+        let _ = std::fs::remove_dir_all(&root);
+    }
     #[test]
     fn apply_keeps_crop_and_camera_position() {
         let mut style = Style::default();

@@ -6,7 +6,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2,
 
 use super::editor::{Editor, Selection};
 use super::theme::{self, pal};
-use crate::project::model::{LayoutKind, Mask, MaskKind, Zoom, ZoomMode};
+use crate::project::model::{LayoutKind, LayoutRange, Mask, MaskKind, Zoom, ZoomMode};
 
 const RULER_H: f32 = 18.0;
 const TRACK_H: f32 = 40.0;
@@ -34,7 +34,7 @@ pub fn extra_height(ed: &Editor) -> f32 {
 
 #[derive(Clone, Copy)]
 enum Drag {
-    SliceEdge { id: u64, left: bool },
+    SliceEdge { id: u64, left: bool, orig: (f64, f64), grab_pb: f64 },
     Zoom { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
     Layout { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
     Mask { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
@@ -61,11 +61,43 @@ fn mask_color() -> Color32 {
     Color32::from_rgb(0xec, 0x48, 0x99)
 }
 
+/// Which part of the block spanning `left..right` the pointer at `x` is on.
+/// The edge zones are `EDGE` wide but never more than a third of the block,
+/// so a short block keeps a body to grab.
+fn part_at(x: f32, left: f32, right: f32) -> Part {
+    let edge = EDGE.min((right - left) / 3.0);
+    if (x - left).abs() < edge {
+        Part::Left
+    } else if (x - right).abs() < edge {
+        Part::Right
+    } else {
+        Part::Body
+    }
+}
+
 /// `v.clamp(lo, hi)`, or `keep` when the range is empty (an item already
 /// shorter than the minimum length can't be resized further; `clamp` would
 /// panic).
 fn clamp_or(v: f64, lo: f64, hi: f64, keep: f64) -> f64 {
     if lo <= hi { v.clamp(lo, hi) } else { keep }
+}
+
+/// Shortest slice, in source ms.
+const MIN_SLICE_MS: f64 = 200.0;
+
+/// Where a slice edge sits after a drag. The edge moves by the pointer's travel
+/// since the grab (playback ms, scaled by the slice speed to source ms) from
+/// where it was when the drag began, so repeating the same pointer position
+/// gives the same edge. `orig` is the slice's (start, end) at that moment, and
+/// `lo`/`hi` are the neighbouring slices' bounds. Dragging outward extends
+/// into the cut region.
+fn dragged_edge(left: bool, orig: (f64, f64), speed: f64, grab_pb: f64, pointer_pb: f64, lo: f64, hi: f64) -> f64 {
+    let delta = (pointer_pb - grab_pb) * speed;
+    if left {
+        clamp_or(orig.0 + delta, lo, orig.1 - MIN_SLICE_MS, orig.0)
+    } else {
+        clamp_or(orig.1 + delta, orig.0 + MIN_SLICE_MS, hi, orig.1)
+    }
 }
 
 /// Greedy lane assignment so overlapping ranges don't cover each other.
@@ -159,6 +191,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
         }
 
         let pointer = ui.input(|i| i.pointer.interact_pos());
+        let press_origin = ui.input(|i| i.pointer.press_origin());
         let mut drag: Option<Drag> = ui.data(|d| d.get_temp(drag_id));
         let mut hover_cursor = None;
 
@@ -181,9 +214,12 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                 label.push_str(" · cursor hidden");
             }
             painter.text(r.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, label, theme::semibold(11.0), Color32::WHITE);
-            if let Some(pos) = pointer
+            // egui reports a drag only after the pointer has travelled a few
+            // pixels, so the drag starts from where the press happened.
+            let at = if bg.drag_started() { press_origin.or(pointer) } else { pointer };
+            if let Some(pos) = at
                 && r.expand(2.0).contains(pos)
-                && slice.is_some()
+                && let Some(s) = slice
             {
                 let near_l = (pos.x - r.left()).abs() < EDGE;
                 let near_r = (pos.x - r.right()).abs() < EDGE;
@@ -191,7 +227,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                     hover_cursor = Some(egui::CursorIcon::ResizeHorizontal);
                 }
                 if bg.drag_started() && drag.is_none() && (near_l || near_r) {
-                    drag = Some(Drag::SliceEdge { id, left: near_l });
+                    drag = Some(Drag::SliceEdge { id, left: near_l, orig: (s.start, s.end), grab_pb: pb_of(pos.x) });
                 } else if bg.clicked() {
                     ed.selection = Selection::Slice(id);
                 }
@@ -230,16 +266,14 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             if r.width() > 40.0 {
                 painter.text(r.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, format!("{:.1}× {mode}", z.scale), theme::semibold(11.0), Color32::WHITE);
             }
-            if let Some(pos) = pointer
+            // egui reports a drag only after the pointer has travelled a few
+            // pixels, so where it started decides which part was grabbed (by
+            // then the pointer has left a narrow edge zone).
+            let at = if bg.drag_started() { press_origin.or(pointer) } else { pointer };
+            if let Some(pos) = at
                 && r.expand(2.0).contains(pos)
             {
-                let part = if (pos.x - r.left()).abs() < EDGE {
-                    Part::Left
-                } else if (pos.x - r.right()).abs() < EDGE {
-                    Part::Right
-                } else {
-                    Part::Body
-                };
+                let part = part_at(pos.x, r.left(), r.right());
                 if part != Part::Body {
                     hover_cursor = Some(egui::CursorIcon::ResizeHorizontal);
                 }
@@ -262,10 +296,9 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
         {
             let src = map.to_source(pb_of(pos.x));
             let scale = ed.project.style.default_zoom;
-            let end_limit = ed.rec.meta.duration_ms;
+            let duration = ed.rec.meta.duration_ms;
             ed.edit(|p| {
-                let id = p.timeline.new_id();
-                p.timeline.zooms.push(Zoom { id, start: src, end: (src + 2500.0).min(end_limit), scale, ..Default::default() });
+                p.timeline.add_zoom(src, scale, duration);
             });
         }
 
@@ -354,13 +387,9 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             })
         {
             let src = map.to_source(pb_of(pos.x));
-            let end_limit = ed.rec.meta.duration_ms;
+            let duration = ed.rec.meta.duration_ms;
             let mut new_id = 0;
-            ed.edit(|p| {
-                let id = p.timeline.new_id();
-                new_id = id;
-                p.timeline.masks.push(Mask { id, start: src, end: (src + 3000.0).min(end_limit), ..Default::default() });
-            });
+            ed.edit(|p| new_id = p.timeline.add_mask(src, duration));
             ed.selection = Selection::Mask(new_id);
         }
 
@@ -429,22 +458,18 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             let dur_src = ed.rec.meta.duration_ms;
             match d {
                 Drag::Playhead => ed.seek(pb_of(pos.x)),
-                Drag::SliceEdge { id, left } => {
-                    let raw = map.to_source(pb_of(pos.x).clamp(0.0, map.duration()));
+                Drag::SliceEdge { id, left, orig, grab_pb } => {
                     let mut draft = ed.project.clone();
                     let slices = &mut draft.timeline.slices;
                     if let Some(i) = slices.iter().position(|s| s.id == id) {
                         let lo = if i > 0 { slices[i - 1].end } else { 0.0 };
                         let hi = if i + 1 < slices.len() { slices[i + 1].start } else { dur_src };
                         let s = &mut slices[i];
+                        let edge = dragged_edge(left, orig, s.speed, grab_pb, pb_of(pos.x), lo, hi);
                         if left {
-                            // Dragging a left edge past its current source start
-                            // extends into the cut region before it.
-                            let target = if pos.x < x_of(map.to_playback_nearest(s.start)) - 1.0 { s.start - (x_of(map.to_playback_nearest(s.start)) - pos.x) as f64 / px_per_ms as f64 * s.speed } else { raw };
-                            s.start = clamp_or(target, lo, s.end - 200.0, s.start);
+                            s.start = edge;
                         } else {
-                            let target = if pos.x > x_of(map.to_playback_nearest(s.end)) + 1.0 { s.end + (pos.x - x_of(map.to_playback_nearest(s.end))) as f64 / px_per_ms as f64 * s.speed } else { raw };
-                            s.end = clamp_or(target, s.start + 200.0, hi, s.end);
+                            s.end = edge;
                         }
                     }
                     ed.commit(draft);
@@ -453,15 +478,17 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                     let delta = src - grab_src;
                     let mut draft = ed.project.clone();
                     if let Some(z) = draft.timeline.zooms.iter_mut().find(|z| z.id == id) {
-                        match part {
-                            Part::Body => {
-                                let len = orig.1 - orig.0;
-                                z.start = (orig.0 + delta).clamp(0.0, (dur_src - len).max(0.0));
-                                z.end = z.start + len;
-                            }
-                            Part::Left => z.start = clamp_or(orig.0 + delta, 0.0, orig.1 - Zoom::MIN_LEN_MS / 2.0, orig.0),
-                            Part::Right => z.end = clamp_or(orig.1 + delta, orig.0 + Zoom::MIN_LEN_MS / 2.0, dur_src, orig.1),
+                        if part != Part::Body {
+                            hover_cursor = Some(egui::CursorIcon::ResizeHorizontal);
                         }
+                        // Always resize from where the drag began, not from the last frame.
+                        let mut edited = Zoom { start: orig.0, end: orig.1, ..*z };
+                        match part {
+                            Part::Body => edited.move_to(orig.0 + delta, dur_src),
+                            Part::Left => edited.trim_start(orig.0 + delta),
+                            Part::Right => edited.trim_end(orig.1 + delta, dur_src),
+                        }
+                        (z.start, z.end) = (edited.start, edited.end);
                     }
                     ed.commit(draft);
                 }
@@ -491,8 +518,8 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                                 l.start = (orig.0 + delta).clamp(0.0, (dur_src - len).max(0.0));
                                 l.end = l.start + len;
                             }
-                            Part::Left => l.start = clamp_or(orig.0 + delta, 0.0, orig.1 - 300.0, orig.0),
-                            Part::Right => l.end = clamp_or(orig.1 + delta, orig.0 + 300.0, dur_src, orig.1),
+                            Part::Left => l.start = clamp_or(orig.0 + delta, 0.0, orig.1 - LayoutRange::MIN_LEN_MS, orig.0),
+                            Part::Right => l.end = clamp_or(orig.1 + delta, orig.0 + LayoutRange::MIN_LEN_MS, dur_src, orig.1),
                         }
                     }
                     ed.commit(draft);
@@ -543,7 +570,68 @@ mod tests {
     }
 
     #[test]
+    fn edge_zones_shrink_on_short_blocks_so_the_body_stays_grabbable() {
+        use super::Part::{Body, Left, Right};
+        // Wide block: the full 7 px at each edge.
+        assert!(matches!(super::part_at(103.0, 100.0, 300.0), Left));
+        assert!(matches!(super::part_at(297.0, 100.0, 300.0), Right));
+        assert!(matches!(super::part_at(200.0, 100.0, 300.0), Body));
+        assert!(matches!(super::part_at(108.0, 100.0, 300.0), Body));
+        // 12 px block: edge zones are 4 px, the middle is still the body.
+        assert!(matches!(super::part_at(103.0, 100.0, 112.0), Left));
+        assert!(matches!(super::part_at(106.0, 100.0, 112.0), Body));
+        assert!(matches!(super::part_at(109.0, 100.0, 112.0), Right));
+    }
+
+    #[test]
     fn overlapping_ranges_get_separate_lanes() {
         assert_eq!(super::lanes(&[(0.0, 5.0), (1.0, 2.0), (5.0, 6.0), (1.5, 7.0)]), vec![0, 1, 0, 2]);
+    }
+
+    const ORIG: (f64, f64) = (1000.0, 5000.0);
+
+    #[test]
+    fn a_held_pointer_gives_the_same_edge_every_frame() {
+        let first = super::dragged_edge(true, ORIG, 1.0, 1000.0, 1300.0, 0.0, 9000.0);
+        for _ in 0..5 {
+            assert_eq!(super::dragged_edge(true, ORIG, 1.0, 1000.0, 1300.0, 0.0, 9000.0), first);
+        }
+        assert_eq!(first, 1300.0);
+    }
+
+    #[test]
+    fn the_left_edge_trims_in_and_extends_out() {
+        // Inward (+) shortens the slice.
+        assert_eq!(super::dragged_edge(true, ORIG, 1.0, 1000.0, 1500.0, 0.0, 9000.0), 1500.0);
+        // Outward (-) lengthens it, down to the previous slice's end.
+        assert_eq!(super::dragged_edge(true, ORIG, 1.0, 1000.0, 700.0, 0.0, 9000.0), 700.0);
+        assert_eq!(super::dragged_edge(true, ORIG, 1.0, 1000.0, -5000.0, 400.0, 9000.0), 400.0);
+        // Never closer than the minimum length to the end.
+        assert_eq!(super::dragged_edge(true, ORIG, 1.0, 1000.0, 9000.0, 0.0, 9000.0), 5000.0 - super::MIN_SLICE_MS);
+    }
+
+    #[test]
+    fn the_right_edge_trims_in_and_extends_out() {
+        assert_eq!(super::dragged_edge(false, ORIG, 1.0, 5000.0, 4500.0, 0.0, 9000.0), 4500.0);
+        assert_eq!(super::dragged_edge(false, ORIG, 1.0, 5000.0, 5600.0, 0.0, 9000.0), 5600.0);
+        assert_eq!(super::dragged_edge(false, ORIG, 1.0, 5000.0, 99_000.0, 0.0, 6000.0), 6000.0);
+        assert_eq!(super::dragged_edge(false, ORIG, 1.0, 5000.0, -9000.0, 0.0, 9000.0), 1000.0 + super::MIN_SLICE_MS);
+    }
+
+    #[test]
+    fn the_slice_speed_scales_the_pointer_travel() {
+        // A 2x slice covers twice the source time per playback ms.
+        assert_eq!(super::dragged_edge(true, ORIG, 2.0, 1000.0, 1100.0, 0.0, 9000.0), 1200.0);
+        assert_eq!(super::dragged_edge(false, ORIG, 0.5, 5000.0, 4800.0, 0.0, 9000.0), 4900.0);
+    }
+
+    #[test]
+    fn an_empty_clamp_range_keeps_the_original_edge() {
+        // A slice shorter than the minimum, squeezed by its neighbour, can't move that edge.
+        let short = (1000.0, 1100.0);
+        assert_eq!(super::dragged_edge(true, short, 1.0, 1000.0, 1050.0, 950.0, 9000.0), 1000.0);
+        assert_eq!(super::dragged_edge(false, short, 1.0, 1100.0, 1050.0, 0.0, 1150.0), 1100.0);
+        // Same for a long slice whose room to the neighbour is under the minimum.
+        assert_eq!(super::dragged_edge(false, ORIG, 1.0, 5000.0, 5100.0, 0.0, 1100.0), 5000.0);
     }
 }

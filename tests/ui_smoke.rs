@@ -15,7 +15,9 @@ fn frame(ctx: &egui::Context, t: f64, f: impl FnMut(&mut egui::Ui)) {
         time: Some(t),
         ..Default::default()
     };
-    let _ = ctx.run_ui(input, f);
+    let mut out = ctx.run_ui(input, f);
+    // Nothing paints this output, and egui panics in debug builds when texture changes are dropped.
+    out.textures_delta.clear();
 }
 
 #[test]
@@ -78,6 +80,26 @@ fn editor_and_home_render_every_panel() {
     assert_eq!(ed.project.timeline.slices.len(), 1);
     ed.redo();
     assert_eq!(ed.project.timeline.slices.len(), 2);
+
+    // Zooms: split the selected one at the playhead, trim an edge, delete, undo.
+    let id = ed.project.timeline.zooms.last().unwrap().id;
+    let (z0, z1) = {
+        let z = ed.project.timeline.zooms.iter().find(|z| z.id == id).unwrap();
+        (z.start, z.end)
+    };
+    ed.selection = Selection::Zoom(id);
+    ed.seek(ed.preview.scene.map.to_playback_nearest((z0 + z1) / 2.0));
+    let count = ed.project.timeline.zooms.len();
+    let slices = ed.project.timeline.slices.len();
+    ed.split_zoom();
+    assert_eq!(ed.project.timeline.zooms.len(), count + 1, "split the selected zoom");
+    assert_eq!(ed.project.timeline.slices.len(), slices, "and left the clips alone");
+    ed.selection = Selection::Zoom(id);
+    ed.delete_selection();
+    assert_eq!(ed.project.timeline.zooms.len(), count);
+    ed.undo();
+    ed.undo();
+    assert_eq!(ed.project.timeline.zooms.len(), count);
 
     // Playback advances the playhead.
     ed.seek(0.0);

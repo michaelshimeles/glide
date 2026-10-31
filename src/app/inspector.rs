@@ -501,7 +501,10 @@ fn audio(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
             if ui.button("Choose…").clicked()
                 && let Some(f) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "m4a", "wav", "aac", "aiff"]).pick_file()
             {
-                a.music = Some(f.to_string_lossy().into_owned());
+                match ed.package.import_asset(&f, "music") {
+                    Ok(rel) => a.music = Some(rel),
+                    Err(e) => ed.status = Some(format!("Couldn't use that music file: {e:#}")),
+                }
             }
             if a.music.is_some() && ui.button("Remove").clicked() {
                 a.music = None;
@@ -509,6 +512,9 @@ fn audio(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
         });
         if let Some(m) = &a.music {
             caption(ui, &std::path::Path::new(m).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+            if crate::export::audio::music_missing(Some(&ed.package.root), a) {
+                ui.label(RichText::new("Music file missing").size(theme::SECONDARY).color(Color32::from_rgb(255, 69, 58)));
+            }
             slider(ui, "Music volume", &mut a.music_volume, 0.0..=1.0, "");
         }
     });
@@ -618,6 +624,7 @@ fn animation(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
 fn zoom_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
     let Some(z) = d.timeline.zooms.iter_mut().find(|z| z.id == id) else { return };
     let mut delete = false;
+    let mut split = false;
     section(ui, "Zoom", |ui| {
         slider(ui, "Zoom level", &mut z.scale, 1.0..=5.0, "×");
         let mut mode = match z.mode {
@@ -642,8 +649,14 @@ fn zoom_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
         toggle_row(ui, "Instant (no animation)", &mut z.instant);
         toggle_row(ui, "Disabled", &mut z.disabled);
         caption(ui, &format!("{} – {}", widgets::fmt_time(z.start), widgets::fmt_time(z.end)));
-        delete = ui.button("Delete zoom").clicked();
+        ui.horizontal(|ui| {
+            split = ui.button("Split at playhead").on_hover_text("Cut this zoom in two at the playhead (⇧S)").clicked();
+            delete = ui.button("Delete zoom").clicked();
+        });
     });
+    if split {
+        ed.split_zoom_in(d, id);
+    }
     if delete {
         d.timeline.zooms.retain(|z| z.id != id);
         ed.selection = Selection::None;

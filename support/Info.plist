@@ -36,6 +36,10 @@
 	<!-- Keep macOS camera reactions (balloons etc.) out of the camera bubble. -->
 	<key>NSCameraReactionEffectGesturesEnabledDefault</key>
 	<false/>
+	<!-- Without this macOS logs that AVCaptureDeviceTypeExternal is deprecated for Continuity Cameras.
+	     Glide lists both device types, so an iPhone used as a webcam is found either way. -->
+	<key>NSCameraUseContinuityCameraDeviceType</key>
+	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Glide records your camera into a bubble over your screen recordings.</string>
 	<key>NSMicrophoneUsageDescription</key>

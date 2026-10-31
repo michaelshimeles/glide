@@ -21,6 +21,12 @@ use crate::util::*;
 
 const TIMESCALE: i32 = 60_000;
 
+/// Presentation time of frame `frame` in [`TIMESCALE`] units. Multiplying before dividing keeps
+/// rates that don't divide 60 000 (7 fps, say) from drifting a few ticks short each second.
+pub(crate) fn frame_pts(frame: u64, fps: u32) -> i64 {
+    (frame as i64 * TIMESCALE as i64) / fps as i64
+}
+
 pub struct WriterSpec {
     pub width: u32,
     pub height: u32,
@@ -105,6 +111,12 @@ fn video_settings(s: &WriterSpec, quality: Option<f64>) -> Retained<Dict> {
 
 impl MovieWriter {
     pub fn create(path: &Path, s: &WriterSpec) -> Result<Self> {
+        if s.fps == 0 {
+            bail!("frame rate must be at least 1 (got {})", s.fps);
+        }
+        if s.width == 0 || s.height == 0 {
+            bail!("frame size must be at least 1x1 (got {}x{})", s.width, s.height);
+        }
         if path.exists() {
             std::fs::remove_file(path).with_context(|| format!("replacing {}", path.display()))?;
         }
@@ -261,7 +273,7 @@ impl MovieWriter {
                 }
             }
         }
-        let t = unsafe { CMTime::new(self.frames as i64 * (TIMESCALE as i64 / self.fps as i64), TIMESCALE) };
+        let t = unsafe { CMTime::new(frame_pts(self.frames, self.fps), TIMESCALE) };
         if !unsafe { self.adaptor.appendPixelBuffer_withPresentationTime(pb, t) } {
             bail!("append frame {}: {}", self.frames, err_text(&self.writer));
         }
@@ -293,7 +305,7 @@ impl MovieWriter {
     pub fn finish(mut self) -> Result<()> {
         self.drain_audio()?;
         unsafe {
-            let end = CMTime::new(self.frames as i64 * (TIMESCALE as i64 / self.fps as i64), TIMESCALE);
+            let end = CMTime::new(frame_pts(self.frames, self.fps), TIMESCALE);
             self.writer.endSessionAtSourceTime(end);
             self.video.markAsFinished();
             if let Some(a) = &self.audio
@@ -323,7 +335,7 @@ impl MovieWriter {
 /// Optimising for network use (index first) rewrites the movie through a
 /// `<name>.sb-…` temporary that AVFoundation can leave next to the finished
 /// file; remove it.
-fn remove_fast_start_leftovers(path: &Path) {
+pub(crate) fn remove_fast_start_leftovers(path: &Path) {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return };
     let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
     let prefix = format!("{name}.sb-");
@@ -349,5 +361,40 @@ pub fn fill_bgra(pb: &CVPixelBuffer, bgra: &[u8], width: u32, height: u32, src_s
             std::ptr::copy_nonoverlapping(bgra.as_ptr().add(y * src_stride), dst.add(y * stride), row);
         }
         CVPixelBufferUnlockBaseAddress(pb, CVPixelBufferLockFlags(0));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_pts_matches_the_old_formula_for_the_offered_rates() {
+        for fps in [10u32, 15, 20, 24, 25, 30, 50, 60] {
+            for frame in 0..20_000u64 {
+                assert_eq!(frame_pts(frame, fps), frame as i64 * (TIMESCALE as i64 / fps as i64), "frame {frame} at {fps} fps");
+            }
+        }
+    }
+
+    #[test]
+    fn frame_pts_lands_on_the_second_for_rates_that_do_not_divide_the_timescale() {
+        // 60_000 / 7 truncates to 8571, so the old formula gave 59_997.
+        assert_eq!(frame_pts(7, 7), 60_000);
+        assert_eq!(frame_pts(70, 7), 600_000);
+    }
+
+    #[test]
+    fn a_frame_rate_of_zero_is_refused_and_an_existing_file_is_kept() {
+        let dir = std::env::temp_dir().join(format!("glide-writer-fps0-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("keep.mp4");
+        std::fs::write(&path, b"existing").unwrap();
+        let spec = WriterSpec { width: 64, height: 64, fps: 0, codec: Codec::H264, bitrate: 1_000_000, quality: None, audio: false };
+        let err = MovieWriter::create(&path, &spec).err().expect("fps 0 is refused");
+        assert!(err.to_string().contains("frame rate"), "{err}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

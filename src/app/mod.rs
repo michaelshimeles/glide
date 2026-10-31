@@ -7,7 +7,9 @@ pub mod editor;
 pub mod maskwatch;
 pub mod home;
 pub mod hotkey;
+pub mod ioswatch;
 pub mod inspector;
+pub mod lifecycle;
 pub mod macos;
 pub mod menubar;
 pub mod player;
@@ -18,6 +20,7 @@ pub mod timeline;
 pub mod updater;
 pub mod voiceover;
 pub mod recbar;
+pub mod restart;
 pub mod widgets;
 pub mod winpick;
 
@@ -38,6 +41,7 @@ use crate::recorder::{self, Recorder, Target};
 use crate::render::Gpu;
 use editor::Editor;
 use home::{Devices, Settings, SourceKind, Thumbs};
+use lifecycle::{ExportGuard, Leaving, Switch};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Cmd {
@@ -89,6 +93,9 @@ pub fn toolbar_drag(ui: &mut egui::Ui) {
     }
 }
 
+/// How long a failed iPhone preview waits before it is tried again.
+const IOS_RETRY: Duration = Duration::from_secs(2);
+
 struct Win {
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -110,21 +117,36 @@ enum Which {
     Overlay(u32),
 }
 
+struct Starting<K, V> {
+    key: K,
+    rx: std::sync::mpsc::Receiver<Result<V, String>>,
+    handle: std::thread::JoinHandle<()>,
+}
+
 /// Something started on a background thread for a key (a preview stream for
 /// a source, a meter for a microphone): what's wanted, what's running and
 /// what's starting. Changes settle before restarting; a key that failed
-/// isn't retried until the wanted key changes.
+/// isn't retried until the wanted key changes, or until `reset_failed` or
+/// `retry_failed` clears the failure.
 struct Slot<K, V> {
     want: Option<K>,
     want_since: Option<Instant>,
     running: Option<(K, V)>,
-    starting: Option<(K, std::sync::mpsc::Receiver<Result<V, String>>)>,
+    starting: Option<Starting<K, V>>,
     failed: Option<(K, String)>,
+    /// When `failed` was set.
+    failed_at: Option<Instant>,
+    /// The last failure text printed, so a retry that fails the same way
+    /// again isn't printed again.
+    logged: Option<String>,
+    /// Threads still dropping stopped values (stopping a capture session
+    /// takes a moment, so it isn't done on the UI thread).
+    dropping: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl<K, V> Default for Slot<K, V> {
     fn default() -> Self {
-        Slot { want: None, want_since: None, running: None, starting: None, failed: None }
+        Slot { want: None, want_since: None, running: None, starting: None, failed: None, failed_at: None, logged: None, dropping: vec![] }
     }
 }
 
@@ -136,25 +158,25 @@ impl<K: Clone + PartialEq + Send + 'static, V: Send + 'static> Slot<K, V> {
         if want != self.want {
             self.want = want.clone();
             self.want_since = Some(Instant::now());
-            self.failed = None;
+            self.reset_failed();
         }
         if self.running.as_ref().is_some_and(|(k, _)| Some(k) != want.as_ref()) {
             let (_, v) = self.running.take().unwrap();
-            std::thread::spawn(move || drop(v));
+            self.drop_later(v);
             stopped = true;
         }
-        if let Some((k, rx)) = &self.starting
-            && let Ok(result) = rx.try_recv()
+        if let Some(s) = &self.starting
+            && let Ok(result) = s.rx.try_recv()
         {
-            let k = k.clone();
-            self.starting = None;
+            let s = self.starting.take().unwrap();
+            let _ = s.handle.join();
             match result {
-                Ok(v) if Some(&k) == want.as_ref() && self.running.is_none() => self.running = Some((k, v)),
-                Ok(v) => drop(std::thread::spawn(move || drop(v))),
-                Err(e) => {
-                    eprintln!("glide: {name}: {e}");
-                    self.failed = Some((k, e));
+                Ok(v) if Some(&s.key) == want.as_ref() && self.running.is_none() => {
+                    self.logged = None;
+                    self.running = Some((s.key, v));
                 }
+                Ok(v) => self.drop_later(v),
+                Err(e) => self.fail(s.key, name, e),
             }
         }
         // Wait for edits (an area being typed in) to settle before starting.
@@ -167,17 +189,82 @@ impl<K: Clone + PartialEq + Send + 'static, V: Send + 'static> Slot<K, V> {
         {
             let (tx, rx) = std::sync::mpsc::channel();
             let key = k.clone();
-            std::thread::spawn(move || {
+            let handle = std::thread::spawn(move || {
                 let _ = tx.send(objc2::rc::autoreleasepool(|_| start(&key)));
                 wake();
             });
-            self.starting = Some((k, rx));
+            self.starting = Some(Starting { key: k, rx, handle });
         }
         stopped
     }
 
     fn active(&self) -> bool {
         self.running.is_some() || self.starting.is_some()
+    }
+
+    /// Record `k` as failed with `e`, printing the text unless the last
+    /// failure said the same.
+    fn fail(&mut self, k: K, name: &str, e: String) {
+        if self.logged.as_deref() != Some(e.as_str()) {
+            crate::diag::note(&format!("glide: {name}: {e}"));
+            self.logged = Some(e.clone());
+        }
+        self.failed = Some((k, e));
+        self.failed_at = Some(Instant::now());
+    }
+
+    /// Stop the running value because it reported `msg`, and count its key as
+    /// failed (so `retry_failed` can bring it back). Returns true if
+    /// something was running, whose output is then stale.
+    fn fail_running(&mut self, name: &str, msg: String) -> bool {
+        let Some((k, v)) = self.running.take() else { return false };
+        self.drop_later(v);
+        self.fail(k, name, msg);
+        true
+    }
+
+    /// Drop `v` on a thread of its own, remembered so `stop_and_join` can
+    /// wait for it.
+    fn drop_later(&mut self, v: V) {
+        self.dropping.retain(|h| !h.is_finished());
+        self.dropping.push(std::thread::spawn(move || drop(v)));
+    }
+
+    /// Stop everything now, on this thread, and return only when it has
+    /// stopped: the running value is dropped here, a value still starting is
+    /// joined and dropped, and earlier background drops are joined. For a
+    /// single-client device that must be free before something else opens it.
+    fn stop_and_join(&mut self) {
+        drop(self.running.take());
+        if let Some(s) = self.starting.take() {
+            let _ = s.handle.join();
+            if let Ok(Ok(v)) = s.rx.try_recv() {
+                drop(v);
+            }
+        }
+        for h in self.dropping.drain(..) {
+            let _ = h.join();
+        }
+        self.want = None;
+        self.reset_failed();
+    }
+
+    /// Forget a failure so the wanted key starts again on the next `update`.
+    fn reset_failed(&mut self) {
+        self.failed = None;
+        self.failed_at = None;
+    }
+
+    /// Forget a failure that is at least `after` old at `now`. Returns
+    /// whether it did.
+    fn retry_failed(&mut self, now: Instant, after: Duration) -> bool {
+        match self.failed_at {
+            Some(at) if self.failed.is_some() && now.saturating_duration_since(at) >= after => {
+                self.reset_failed();
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Why the wanted key isn't running, if it failed.
@@ -320,6 +407,9 @@ struct App {
     /// When playback's next preview frame is due (redraws are paced to it).
     next_frame_at: Option<Instant>,
     finished: Arc<Mutex<Option<Finished>>>,
+    restart: restart::Restart,
+    /// Set by the thread that cancels the old take of a restart.
+    restart_done: Arc<AtomicBool>,
     error: Option<String>,
     menubar: Option<menubar::MenuBar>,
     last_tick: Instant,
@@ -379,6 +469,8 @@ impl App {
             stale_textures: vec![],
             next_frame_at: None,
             finished: Arc::new(Mutex::new(None)),
+            restart: restart::Restart::Idle,
+            restart_done: Arc::new(AtomicBool::new(false)),
             error: None,
             menubar: None,
             last_tick: Instant::now(),
@@ -526,18 +618,61 @@ impl App {
         }
     }
 
-    fn open_project(&mut self, el: &ActiveEventLoop, path: PathBuf) {
+    /// Before the editor goes away: if it is exporting, ask whether to cancel
+    /// the export (scripted runs just cancel). False means stay where we are.
+    fn confirm_leaving(&mut self, leaving: Leaving) -> bool {
+        let running = matches!(&self.view, View::Editor(ed) if ed.export_running());
+        match lifecycle::export_guard(running, self.scripted(), leaving) {
+            ExportGuard::Proceed => return true,
+            ExportGuard::ProceedCancelling => {}
+            ExportGuard::Ask { prompt } => {
+                let answer = rfd::MessageDialog::new().set_title("Glide").set_description(prompt).set_buttons(rfd::MessageButtons::YesNo).show();
+                if answer != rfd::MessageDialogResult::Yes {
+                    return false;
+                }
+            }
+        }
+        if let View::Editor(ed) = &mut self.view {
+            ed.cancel_export();
+        }
+        true
+    }
+    /// Show `path` in the editor. Returns whether that project is now open.
+    /// The running export is cancelled only once the new editor is ready.
+    fn open_project(&mut self, el: &ActiveEventLoop, path: PathBuf, why: Leaving) -> bool {
         self.show_main(el);
-        let Some(gpu) = self.gpu.clone() else { return };
-        match Editor::open(&path, gpu) {
-            Ok(ed) => {
+        let Some(gpu) = self.gpu.clone() else { return false };
+        let scripted = self.scripted();
+        let (current, same) = match &mut self.view {
+            View::Editor(ed) => {
+                let same = lifecycle::same_project(&ed.package.root, &path);
+                (Some(&mut **ed), same)
+            }
+            View::Start => (None, false),
+        };
+        let ask = |prompt| rfd::MessageDialog::new().set_title("Glide").set_description(prompt).set_buttons(rfd::MessageButtons::YesNo).show() == rfd::MessageDialogResult::Yes;
+        match lifecycle::switch_to(current, same, scripted, why, || Editor::open(&path, gpu), ask) {
+            Switch::Same => true,
+            Switch::Opened(ed) => {
                 if let Some(w) = &self.main {
                     w.window.set_title(&ed.project.name);
                 }
                 self.release_editor_texture();
                 self.view = View::Editor(Box::new(ed));
+                true
             }
-            Err(e) => self.error = Some(format!("Couldn't open {}: {e:#}", path.display())),
+            Switch::Declined => {
+                if why == Leaving::OpenRecording
+                    && let View::Editor(ed) = &mut self.view
+                {
+                    ed.status = Some("Your recording is saved. Open it from Recent once the export is done.".into());
+                }
+                false
+            }
+            Switch::Failed(e) => {
+                self.error = Some(format!("Couldn't open {}: {e:#}", path.display()));
+                false
+            }
         }
     }
 
@@ -606,7 +741,7 @@ impl App {
     }
 
     fn start_recording(&mut self, _el: &ActiveEventLoop) {
-        if self.recording.is_some() || self.finishing {
+        if self.recording.is_some() || self.finishing || self.restart.busy() {
             return;
         }
         self.error = None;
@@ -638,6 +773,13 @@ impl App {
 
     fn begin_capture(&mut self) {
         let opts = self.recorder_options();
+        // An iPhone's screen has one client at a time: let the preview's
+        // session finish stopping before the recorder opens the device.
+        let device = matches!(opts.target, Target::Device { .. });
+        if device {
+            self.live.screen.stop_and_join();
+            self.live.tex = None;
+        }
         match Recorder::start(opts) {
             Ok(r) => {
                 if let Some(rec) = &mut self.recording {
@@ -646,6 +788,9 @@ impl App {
                 }
             }
             Err(e) => {
+                if device {
+                    crate::diag::note(&format!("glide: ios recording: could not start: {e:#}"));
+                }
                 self.recording = None;
                 self.error = Some(format!("Couldn't start recording: {e:#}"));
                 self.close_bar();
@@ -675,22 +820,50 @@ impl App {
         });
     }
 
-    /// Discard the current recording (if any). `restarting` keeps the main
-    /// window hidden and finishes the cancel before a new one starts.
-    fn cancel_recording(&mut self, restarting: bool) {
+    /// Discard the current recording (if any).
+    fn cancel_recording(&mut self) {
         let Some(rec) = self.recording.take() else { return };
         if let Some(r) = rec.rec {
-            if restarting {
-                objc2::rc::autoreleasepool(|_| r.cancel());
-            } else {
-                std::thread::spawn(move || objc2::rc::autoreleasepool(|_| r.cancel()));
+            Self::spawn_cancel(r, None);
+        }
+        self.close_bar();
+        push(Cmd::ShowWindow);
+    }
+
+    /// Cancel a take off the main thread, then set `done` and wake the loop.
+    fn spawn_cancel(r: Recorder, done: Option<Arc<AtomicBool>>) {
+        std::thread::spawn(move || {
+            // Report back even if the cancel panics, so a restart can't hang.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| objc2::rc::autoreleasepool(|_| r.cancel())));
+            if let Some(done) = done {
+                done.store(true, Ordering::SeqCst);
+            }
+            wake();
+        });
+    }
+
+    /// Feed a restart event to the state machine and do what it says.
+    fn restart_event(&mut self, el: &ActiveEventLoop, event: restart::Event) {
+        let (next, action) = restart::step(self.restart, event);
+        self.restart = next;
+        match action {
+            restart::Do::Nothing => {}
+            restart::Do::CancelOldTake => match self.recording.take().and_then(|rec| rec.rec) {
+                Some(r) => Self::spawn_cancel(r, Some(self.restart_done.clone())),
+                // Still counting down: there is no recorder to cancel.
+                None => self.restart_event(el, restart::Event::Cancelled),
+            },
+            restart::Do::StartNewTake => self.start_recording(el),
+            restart::Do::CloseBar => {
+                self.close_bar();
+                push(Cmd::ShowWindow);
             }
         }
-        // Restarting keeps the recording bar up for the new take.
-        if !restarting {
-            self.close_bar();
-            push(Cmd::ShowWindow);
-        }
+    }
+
+    /// A save or a restart's cancel is still running.
+    fn winding_down(&self) -> bool {
+        (self.finishing && self.finished.lock().unwrap().is_none()) || (self.restart.busy() && !self.restart_done.load(Ordering::SeqCst))
     }
 
     /// Remove the recording bar, remembering where it was.
@@ -714,21 +887,24 @@ impl App {
                     if r.is_paused() { r.resume() } else { r.pause() }
                 }
             }
-            Cmd::Restart => {
-                if self.recording.is_some() {
-                    self.cancel_recording(true);
-                    self.start_recording(el);
+            Cmd::Restart => self.restart_event(el, restart::Event::Requested { recording: self.recording.is_some() }),
+            Cmd::Cancel => {
+                if self.restart.busy() {
+                    self.restart_event(el, restart::Event::Aborted);
+                } else {
+                    self.cancel_recording();
                 }
             }
-            Cmd::Cancel => self.cancel_recording(false),
             Cmd::ShowWindow => self.show_main(el),
             Cmd::OpenFolder => macos::open_folder(&self.settings.dir()),
             Cmd::StartUpdater => updater::start(),
             Cmd::CheckForUpdates => updater::check_for_updates(),
             Cmd::Back => self.close_project(),
-            Cmd::Open(p) => self.open_project(el, p),
+            Cmd::Open(p) => {
+                self.open_project(el, p, Leaving::OpenProject);
+            }
             Cmd::RecordSource(kind) => {
-                if self.recording.is_some() {
+                if self.recording.is_some() || self.restart.busy() {
                     return;
                 }
                 self.settings.source = kind;
@@ -740,7 +916,7 @@ impl App {
                 }
             }
             Cmd::SelectArea(record_after) => {
-                if self.recording.is_some() {
+                if self.recording.is_some() || self.restart.busy() {
                     return;
                 }
                 // Pick on the display under the pointer.
@@ -758,7 +934,7 @@ impl App {
                 self.open_overlays(el, id);
             }
             Cmd::SelectWindow(record_after) => {
-                if self.recording.is_some() {
+                if self.recording.is_some() || self.restart.busy() {
                     return;
                 }
                 // Pick on the display under the pointer.
@@ -769,6 +945,9 @@ impl App {
                 self.open_overlays(el, id);
             }
             Cmd::Quit => {
+                if !self.confirm_leaving(Leaving::Quit) {
+                    return;
+                }
                 if let View::Editor(ed) = &mut self.view {
                     ed.save();
                 }
@@ -776,7 +955,7 @@ impl App {
                     self.stop_recording();
                 }
                 let deadline = Instant::now() + Duration::from_secs(60);
-                while self.finishing && self.finished.lock().unwrap().is_none() && Instant::now() < deadline {
+                while self.winding_down() && Instant::now() < deadline {
                     std::thread::sleep(Duration::from_millis(20));
                 }
                 el.exit();
@@ -790,6 +969,9 @@ impl App {
             self.handle(el, c);
         }
         self.update_live();
+        if self.restart.busy() && self.restart_done.swap(false, Ordering::SeqCst) {
+            self.restart_event(el, restart::Event::Cancelled);
+        }
         if let Some(rec) = &self.recording
             && rec.rec.is_none()
             && rec.countdown_until.is_some_and(|t| Instant::now() >= t)
@@ -808,8 +990,9 @@ impl App {
             match res {
                 Ok(path) => {
                     self.projects = home::scan_projects(&self.settings.dir());
-                    self.open_project(el, path);
-                    if let View::Editor(ed) = &mut self.view {
+                    if self.open_project(el, path, Leaving::OpenRecording)
+                        && let View::Editor(ed) = &mut self.view
+                    {
                         ed.fresh = true;
                     }
                 }
@@ -829,6 +1012,7 @@ impl App {
         let paused = matches!(&self.recording, Some(Recording { rec: Some(r), .. }) if r.is_paused());
         if let Some(b) = &mut self.bar {
             b.update(match &self.recording {
+                _ if self.restart.busy() => recbar::State::Restarting,
                 Some(Recording { rec: None, countdown_until: Some(t) }) => recbar::State::Countdown(t.saturating_duration_since(Instant::now()).as_secs() + 1),
                 _ => recbar::State::Recording { clock: clock.clone(), paused },
             });
@@ -1284,6 +1468,10 @@ impl App {
                 home::set_resize_note(note);
                 self.devices = home::Devices::load();
             }
+            home::Action::RefreshIos => {
+                self.devices.ios = crate::capture::camera::ios_devices().into_iter().map(|d| home::Device { id: d.id, name: d.name }).collect();
+                self.live.screen.reset_failed();
+            }
             home::Action::Back => self.close_project(),
             home::Action::None => {}
         }
@@ -1304,7 +1492,7 @@ impl App {
         }
         let s = &self.settings;
         if s.source == SourceKind::Device {
-            return s.ios_device.clone().map(|id| livecap::Source::Device { id });
+            return home::listed_ios_id(s.ios_device.as_deref(), &self.devices.ios).map(|id| livecap::Source::Device { id });
         }
         if crate::capture::tcc::screen_status() != crate::capture::tcc::Status::Granted {
             return None;
@@ -1324,6 +1512,20 @@ impl App {
             self.settings.save();
         }
         let visible = self.setup_visible();
+        // A phone plugged in (or out) after launch changes the list; a
+        // failed iPhone preview is tried again every few seconds, since the
+        // phone may only have been locked or slow to wake.
+        let watch_ios = visible && self.settings.source == SourceKind::Device;
+        ioswatch::set_wanted(watch_ios);
+        if let Some(list) = ioswatch::take()
+            && ioswatch::differs(&list, &self.devices.ios)
+        {
+            self.devices.ios = list;
+            self.live.screen.reset_failed();
+        }
+        if watch_ios {
+            self.live.screen.retry_failed(Instant::now(), IOS_RETRY);
+        }
         let s = &self.settings;
         let screen = self.live_source().map(|src| {
             let audio = s.system_audio && !matches!(src, livecap::Source::Device { .. });
@@ -1332,6 +1534,13 @@ impl App {
         let camera = (visible && s.camera).then(|| livecap::Source::Camera { id: s.camera_id.clone() });
         let mic = (visible && s.mic && self.selftest.is_none()).then(|| s.mic_id.as_ref().and_then(|id| self.devices.mics.iter().find(|m| &m.id == id)).map(|m| m.name.clone()));
         let live = &mut self.live;
+        // An iPhone preview that reports an error or a disconnect is stopped
+        // and shows the text; the retry brings it back.
+        if let Some(msg) = live.screen.running.as_ref().and_then(|(_, p)| p.take_runtime_error())
+            && live.screen.fail_running("live preview", msg)
+        {
+            live.tex = None;
+        }
         // Screens at native resolution, scaled to the canvas (30 fps, as Rec);
         // in light mode small and at 15 fps (5K frames swamp older Macs).
         if live.screen.update(screen, "live preview", |(src, audio)| {
@@ -1426,6 +1635,7 @@ impl App {
         } else {
             match s.source {
                 SourceKind::Window if s.window.is_none() => Some("Choose a window to see it here.".into()),
+                SourceKind::Device if self.devices.ios.is_empty() => Some(home::IOS_CONNECT_HINT.into()),
                 SourceKind::Device if s.ios_device.is_none() => Some("Connect an iPhone or iPad to see it here.".into()),
                 SourceKind::Device => None,
                 _ if crate::capture::tcc::screen_status() != crate::capture::tcc::Status::Granted => {
@@ -1447,6 +1657,9 @@ impl App {
 
     /// Close the open recording (it saves) and show recording setup.
     fn close_project(&mut self) {
+        if !self.confirm_leaving(Leaving::CloseProject) {
+            return;
+        }
         if let View::Editor(ed) = &mut self.view {
             ed.save();
             // Its thumbnail re-renders if the project changed.
@@ -1835,7 +2048,7 @@ impl App {
         let renderer = &mut win.renderer;
         // The overlay may close itself while drawing; remember that.
         let mut keep = true;
-        let out = ctx.run_ui(input, |ui| match which {
+        let mut out = ctx.run_ui(input, |ui| match which {
             Which::Main => self.draw_main(ui, renderer),
             Which::Overlay(display) => {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
@@ -1904,6 +2117,8 @@ impl App {
         for id in &out.textures_delta.free {
             win.renderer.free_texture(id);
         }
+        // Applied above. egui debug-asserts when a frame drops its texture deltas.
+        out.textures_delta.clear();
         if DRAG.swap(false, Ordering::Relaxed) {
             let _ = win.window.drag_window();
         }
@@ -1923,7 +2138,7 @@ impl ApplicationHandler for App {
         self.bind_hotkeys();
         self.show_main(el);
         if let Some(p) = self.open_at_launch.take() {
-            self.open_project(el, p);
+            self.open_project(el, p, Leaving::OpenProject);
         }
         if !self.scripted() {
             push(Cmd::StartUpdater);
@@ -2002,15 +2217,16 @@ impl ApplicationHandler for App {
             if ed.voice.is_some() {
                 ed.stop_voiceover();
             }
+            ed.cancel_export();
             ed.save();
         }
-        if let Some(Recording { rec: Some(r), .. }) = self.recording.take() {
-            if let Err(e) = objc2::rc::autoreleasepool(|_| r.stop()) {
-                eprintln!("glide: saving the recording on quit failed: {e:#}");
-            }
+        if let Some(Recording { rec: Some(r), .. }) = self.recording.take()
+            && let Err(e) = objc2::rc::autoreleasepool(|_| r.stop())
+        {
+            eprintln!("glide: saving the recording on quit failed: {e:#}");
         }
         let deadline = Instant::now() + Duration::from_secs(60);
-        while self.finishing && self.finished.lock().unwrap().is_none() && Instant::now() < deadline {
+        while self.winding_down() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
         if !self.scripted() {
@@ -2027,7 +2243,7 @@ impl ApplicationHandler for App {
             View::Editor(ed) => (ed.tick(), ed.background_busy()),
             View::Start => (false, false),
         };
-        let live = self.recording.is_some() || self.finishing;
+        let live = self.recording.is_some() || self.finishing || self.restart.busy();
         let now = Instant::now();
         let mut next = now + Duration::from_millis(if live { 200 } else { 500 });
         // Nothing to show while the window is hidden or covered.
@@ -2085,4 +2301,194 @@ fn covered_note(s: &home::Settings) -> Option<String> {
     let target = if s.display == 0 { macos::main_display() } else { s.display };
     (fs != 0 && matches!(s.source, SourceKind::Display | SourceKind::Area) && fs == target)
         .then(|| "Glide is full screen on this display, so there's nothing else to show.\nExit full screen to see what you'll record.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    type TestSlot = Slot<u8, u8>;
+
+    /// Let the wanted key's 300 ms settle time pass without sleeping.
+    fn settled(slot: &mut TestSlot) {
+        slot.want_since = Some(Instant::now() - Duration::from_secs(1));
+    }
+
+    /// Call `update` until `done` holds (the start runs on another thread).
+    fn pump(slot: &mut TestSlot, want: Option<u8>, start: fn(&u8) -> Result<u8, String>, done: impl Fn(&TestSlot) -> bool) {
+        for _ in 0..400 {
+            slot.update(want, "test", start);
+            if done(slot) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("slot did not settle");
+    }
+
+    static FAIL_CALLS: AtomicUsize = AtomicUsize::new(0);
+    fn always_fails(_: &u8) -> Result<u8, String> {
+        FAIL_CALLS.fetch_add(1, Ordering::SeqCst);
+        Err("no device".into())
+    }
+
+    #[test]
+    fn slot_does_not_retry_a_failed_key_by_itself() {
+        let mut slot = TestSlot::default();
+        slot.update(Some(1), "test", always_fails);
+        settled(&mut slot);
+        pump(&mut slot, Some(1), always_fails, |s| s.error().is_some());
+        assert_eq!(slot.error(), Some("no device"));
+        for _ in 0..20 {
+            slot.update(Some(1), "test", always_fails);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(FAIL_CALLS.load(Ordering::SeqCst), 1);
+    }
+
+    static RESET_CALLS: AtomicUsize = AtomicUsize::new(0);
+    fn fails_once(_: &u8) -> Result<u8, String> {
+        if RESET_CALLS.fetch_add(1, Ordering::SeqCst) == 0 { Err("first try".into()) } else { Ok(7) }
+    }
+
+    #[test]
+    fn slot_reset_failed_starts_the_same_key_again() {
+        let mut slot = TestSlot::default();
+        slot.update(Some(1), "test", fails_once);
+        settled(&mut slot);
+        pump(&mut slot, Some(1), fails_once, |s| s.error().is_some());
+        slot.reset_failed();
+        assert_eq!(slot.error(), None);
+        pump(&mut slot, Some(1), fails_once, |s| s.running.is_some());
+        assert_eq!(slot.running.as_ref().map(|(_, v)| *v), Some(7));
+        assert_eq!(RESET_CALLS.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn slot_retry_failed_waits_for_the_interval() {
+        let t0 = Instant::now();
+        let mut slot = TestSlot { want: Some(1), failed: Some((1, "locked".into())), failed_at: Some(t0), ..Default::default() };
+        assert!(!slot.retry_failed(t0 + Duration::from_secs(1), Duration::from_secs(2)));
+        assert_eq!(slot.error(), Some("locked"));
+        assert!(slot.retry_failed(t0 + Duration::from_secs(3), Duration::from_secs(2)));
+        assert_eq!(slot.error(), None);
+        assert!(!slot.retry_failed(t0 + Duration::from_secs(9), Duration::from_secs(2)), "nothing left to retry");
+    }
+
+    fn starts_fine(_: &u8) -> Result<u8, String> {
+        Ok(3)
+    }
+
+    #[test]
+    fn slot_fail_running_stops_the_value_and_shows_the_message() {
+        let mut slot = TestSlot::default();
+        slot.update(Some(1), "test", starts_fine);
+        settled(&mut slot);
+        pump(&mut slot, Some(1), starts_fine, |s| s.running.is_some());
+        assert!(slot.fail_running("test", "The iPhone/iPad was disconnected.".into()));
+        assert!(slot.running.is_none());
+        assert_eq!(slot.error(), Some("The iPhone/iPad was disconnected."));
+        // Nothing is running any more, so a second report changes nothing.
+        assert!(!slot.fail_running("test", "again".into()));
+        assert_eq!(slot.error(), Some("The iPhone/iPad was disconnected."));
+    }
+
+    #[test]
+    fn slot_starts_again_after_fail_running_once_the_retry_interval_passes() {
+        let mut slot = TestSlot::default();
+        slot.update(Some(1), "test", starts_fine);
+        settled(&mut slot);
+        pump(&mut slot, Some(1), starts_fine, |s| s.running.is_some());
+        slot.fail_running("test", "locked".into());
+        // Failed keys are not restarted until the retry clears them.
+        slot.update(Some(1), "test", starts_fine);
+        assert!(slot.starting.is_none() && slot.running.is_none());
+        let later = slot.failed_at.unwrap() + Duration::from_secs(3);
+        assert!(slot.retry_failed(later, IOS_RETRY));
+        pump(&mut slot, Some(1), starts_fine, |s| s.running.is_some());
+    }
+
+    /// A value whose drop takes 100 ms and then sets a flag.
+    struct SlowDrop(&'static std::sync::atomic::AtomicBool);
+    impl Drop for SlowDrop {
+        fn drop(&mut self) {
+            std::thread::sleep(Duration::from_millis(100));
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    static JOIN_DROPPED: AtomicBool = AtomicBool::new(false);
+    #[test]
+    fn slot_stop_and_join_waits_for_a_drop_already_running_in_the_background() {
+        let mut slot: Slot<u8, SlowDrop> = Slot::default();
+        slot.update(Some(1), "test", |_| Ok(SlowDrop(&JOIN_DROPPED)));
+        slot.want_since = Some(Instant::now() - Duration::from_secs(1));
+        for _ in 0..400 {
+            slot.update(Some(1), "test", |_| Ok(SlowDrop(&JOIN_DROPPED)));
+            if slot.running.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(slot.running.is_some());
+        // Nothing wanted: the value is handed to a background thread.
+        slot.update(None, "test", |_| Ok(SlowDrop(&JOIN_DROPPED)));
+        assert!(slot.running.is_none());
+        assert!(!JOIN_DROPPED.load(Ordering::SeqCst), "the drop should still be running");
+        slot.stop_and_join();
+        assert!(JOIN_DROPPED.load(Ordering::SeqCst));
+        assert!(slot.dropping.is_empty());
+    }
+
+    static STARTING_DROPPED: AtomicBool = AtomicBool::new(false);
+    #[test]
+    fn slot_stop_and_join_waits_for_a_value_that_is_still_starting() {
+        let mut slot: Slot<u8, SlowDrop> = Slot::default();
+        let start: fn(&u8) -> Result<SlowDrop, String> = |_| {
+            std::thread::sleep(Duration::from_millis(100));
+            Ok(SlowDrop(&STARTING_DROPPED))
+        };
+        slot.update(Some(1), "test", start);
+        slot.want_since = Some(Instant::now() - Duration::from_secs(1));
+        slot.update(Some(1), "test", start);
+        assert!(slot.starting.is_some());
+        slot.stop_and_join();
+        assert!(slot.running.is_none() && slot.starting.is_none() && slot.want.is_none());
+        assert!(STARTING_DROPPED.load(Ordering::SeqCst), "the late value should be dropped before returning");
+    }
+
+    static STARTING_FINISHED: AtomicBool = AtomicBool::new(false);
+    #[test]
+    fn slot_stop_and_join_joins_startup_thread_completely() {
+        let mut slot: Slot<u8, u8> = Slot::default();
+        let start: fn(&u8) -> Result<u8, String> = |_| {
+            std::thread::sleep(Duration::from_millis(50));
+            STARTING_FINISHED.store(true, Ordering::SeqCst);
+            Err("failed".into())
+        };
+        slot.update(Some(1), "test", start);
+        slot.want_since = Some(Instant::now() - Duration::from_secs(1));
+        slot.update(Some(1), "test", start);
+        assert!(slot.starting.is_some());
+        slot.stop_and_join();
+        assert!(STARTING_FINISHED.load(Ordering::SeqCst), "startup thread must be joined before returning");
+        assert!(slot.starting.is_none());
+    }
+
+    #[test]
+    fn slot_stop_and_join_on_an_idle_slot_returns_at_once() {
+        let mut slot = TestSlot::default();
+        let t = Instant::now();
+        slot.stop_and_join();
+        assert!(t.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn slot_changed_key_clears_the_failure() {
+        let mut slot = TestSlot { want: Some(1), failed: Some((1, "locked".into())), failed_at: Some(Instant::now()), ..Default::default() };
+        slot.update(Some(2), "test", always_fails);
+        assert_eq!(slot.error(), None);
+        assert!(slot.failed_at.is_none());
+    }
 }

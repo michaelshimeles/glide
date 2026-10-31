@@ -8,3 +8,4 @@ target/
 .env
 /dist/
 .artifacts/
+.agents/tasks/

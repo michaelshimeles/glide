@@ -98,15 +98,19 @@ pub struct Focus {
     pub point: Vec2,
     pub zoom: f64,
     pub snap: f64,
+    /// Put `point` in the middle of the view (stopping at the screen's
+    /// edges) instead of leaving it as far across the view as it is across
+    /// the screen. `snap` is ignored.
+    pub centered: bool,
 }
 
 /// Focus for an auto zoom: the latest click/activity cluster that started.
 pub fn auto_focus(z: &Zoom, events: &Events, sizes: &Sizes, t: f64) -> Option<Vec2> {
     let mut inside = Events::range(&events.all, z.start, z.end).to_vec();
-    if inside.is_empty() {
-        if let Some(e) = Events::last_at(&events.all, z.start).or(events.all.first()) {
-            inside.push(*e);
-        }
+    if inside.is_empty()
+        && let Some(e) = Events::last_at(&events.all, z.start).or(events.all.first())
+    {
+        inside.push(*e);
     }
     let fill = sizes.content.div(sizes.window);
     let area = sizes.crop.size().div(v2(fill.y, fill.x)) / z.scale.max(0.01);
@@ -126,13 +130,18 @@ pub fn place(sizes: &Sizes, focus: Focus) -> (f64, Vec2) {
     let body = sizes.default_body();
     let visible = sizes.output / sizes.initial_zoom / scale;
     let max_snap = visible.div(sizes.content);
-    let r = v2(focus.snap.clamp(0.0, max_snap.x), focus.snap.clamp(0.0, max_snap.y));
-    let s = v2(remap(s.x, r.x, 1.0 - r.x + 1e-4, 0.0, 1.0), remap(s.y, r.y, 1.0 - r.y + 1e-4, 0.0, 1.0));
-    // Interpolate between edge-aligned placements so the zoomed window
-    // never exposes the background inside the content frame.
     let frame = Rect::from_min_size(Vec2::ZERO, sizes.content);
     let size = body.size() * scale;
     let fit = v2(size.x.min(frame.w), size.y.min(frame.h));
+    // Centring a point needs half the visible share of the screen on each side.
+    let r = if focus.centered {
+        v2(fit.x / size.x / 2.0, fit.y / size.y / 2.0)
+    } else {
+        v2(focus.snap.clamp(0.0, max_snap.x), focus.snap.clamp(0.0, max_snap.y))
+    };
+    let s = v2(remap(s.x, r.x, 1.0 - r.x + 1e-4, 0.0, 1.0), remap(s.y, r.y, 1.0 - r.y + 1e-4, 0.0, 1.0));
+    // Interpolate between edge-aligned placements so the zoomed window
+    // never exposes the background inside the content frame.
     let lo = (frame.size() - fit) / 2.0;
     let left = lo;
     let right = lo + fit - size;
@@ -151,10 +160,10 @@ pub fn focus_at(timeline: &Timeline, events: &Events, sizes: &Sizes, t: f64, cur
                 ZoomMode::FollowMouse => cursor.unwrap_or(center),
                 ZoomMode::Auto => auto_focus(z, events, sizes, t).unwrap_or(center),
             };
-            let snap = if matches!(z.mode, ZoomMode::Manual { .. }) { 0.0 } else { z.snap_edges };
-            Focus { point, zoom: z.scale.max(1.0), snap }
+            let centered = matches!(z.mode, ZoomMode::Manual { .. });
+            Focus { point, zoom: z.scale.max(1.0), snap: z.snap_edges, centered }
         }
-        None => Focus { point: cursor.unwrap_or(center), zoom: 1.0, snap: FOLLOW_SNAP },
+        None => Focus { point: cursor.unwrap_or(center), zoom: 1.0, snap: FOLLOW_SNAP, centered: false },
     }
 }
 
@@ -183,7 +192,7 @@ mod tests {
     #[test]
     fn unzoomed_window_does_not_move() {
         let sizes = Sizes::new(&Style::default(), v2(1920.0, 1080.0));
-        let (scale, off) = place(&sizes, Focus { point: v2(10.0, 10.0), zoom: 1.0, snap: 0.5 });
+        let (scale, off) = place(&sizes, Focus { point: v2(10.0, 10.0), zoom: 1.0, snap: 0.5, centered: false });
         assert_eq!(scale, 1.0);
         assert!(off.length() < 1e-9);
     }
@@ -194,15 +203,48 @@ mod tests {
         style.padding = 0.0;
         let sizes = Sizes::new(&style, v2(1920.0, 1080.0));
         // Top-left focus: zoomed window's top-left stays at the frame's top-left.
-        let (scale, off) = place(&sizes, Focus { point: v2(0.0, 0.0), zoom: 2.0, snap: 0.25 });
+        let (scale, off) = place(&sizes, Focus { point: v2(0.0, 0.0), zoom: 2.0, snap: 0.25, centered: false });
         assert_eq!(scale, 2.0);
         assert!(off.length() < 1e-6, "{off:?}");
         // Bottom-right focus: the window is shifted left/up by its overflow.
-        let (_, off) = place(&sizes, Focus { point: v2(1920.0, 1080.0), zoom: 2.0, snap: 0.25 });
+        let (_, off) = place(&sizes, Focus { point: v2(1920.0, 1080.0), zoom: 2.0, snap: 0.25, centered: false });
         assert!((off.x + 1920.0).abs() < 1.0 && (off.y + 1080.0).abs() < 1.0, "{off:?}");
         // Centre focus: overflow split evenly.
-        let (_, off) = place(&sizes, Focus { point: v2(960.0, 540.0), zoom: 2.0, snap: 0.25 });
+        let (_, off) = place(&sizes, Focus { point: v2(960.0, 540.0), zoom: 2.0, snap: 0.25, centered: false });
         assert!((off.x + 960.0).abs() < 1.0, "{off:?}");
+    }
+
+    /// Where a screen point (video pixels) is drawn in the content area, with
+    /// the window placed for `focus`.
+    fn drawn_at(sizes: &Sizes, focus: Focus, p: Vec2) -> Vec2 {
+        let (scale, off) = place(sizes, focus);
+        sizes.default_body().min() + off + (p - sizes.crop.min()).mul(v2(scale, scale))
+    }
+
+    #[test]
+    fn a_manual_zoom_puts_its_point_in_the_middle_of_the_view() {
+        let sizes = Sizes::new(&Style::default(), v2(1920.0, 1080.0));
+        let mid = sizes.content / 2.0;
+        for zoom in [1.5, 2.0, 3.0] {
+            for s in [v2(0.5, 0.5), v2(0.4, 0.45), v2(0.6, 0.55)] {
+                let point = sizes.crop.at(s);
+                let at = drawn_at(&sizes, Focus { point, zoom, snap: 0.0, centered: true }, point);
+                assert!((at.x - mid.x).abs() < 0.5 && (at.y - mid.y).abs() < 0.5, "zoom {zoom}, point {s:?} drawn at {at:?}, middle is {mid:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_centred_zoom_near_an_edge_stops_at_the_screen_edge() {
+        let sizes = Sizes::new(&Style::default(), v2(1920.0, 1080.0));
+        let focus = |s: Vec2| Focus { point: sizes.crop.at(s), zoom: 2.0, snap: 0.0, centered: true };
+        // Top-left corner: the window's corner sits at the content's corner.
+        let (_, off) = place(&sizes, focus(v2(0.02, 0.03)));
+        assert!((sizes.default_body().min() + off).length() < 1e-6, "{off:?}");
+        // Bottom-right corner: its far corner sits at the content's far corner.
+        let (scale, off) = place(&sizes, focus(v2(0.99, 0.98)));
+        let far = sizes.default_body().min() + off + sizes.window * scale;
+        assert!((far - sizes.content).length() < 1e-6, "{far:?}");
     }
 
     #[test]

@@ -174,6 +174,9 @@ impl AudioPreview {
         self.set_volume(project.style.audio.volume);
         if self.mixed.as_ref() != Some(&MixKey::of(project)) {
             self.request = Some((Instant::now() + Duration::from_millis(120), project.clone(), rec.clone(), package.to_path_buf()));
+        } else {
+            // Back to what is already mixed: a queued request is stale.
+            self.request = None;
         }
     }
 
@@ -448,5 +451,53 @@ impl Drop for AudioPreview {
 impl Default for AudioPreview {
     fn default() -> Self {
         Self::new()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rebuilt(a: &mut AudioPreview, p: &Project) {
+        a.rebuild(p, &Recording::default(), Path::new("/nonexistent"));
+    }
+
+    #[test]
+    fn a_reverted_edit_clears_the_queued_remix() {
+        let p0 = Project::default();
+        let mut a = AudioPreview::new();
+        a.mixed = Some(MixKey::of(&p0));
+        let mut p1 = p0.clone();
+        p1.style.audio.mute_mic = true;
+        rebuilt(&mut a, &p1);
+        assert!(a.mixing());
+        rebuilt(&mut a, &p0);
+        assert!(!a.mixing());
+        assert!(a.mixed == Some(MixKey::of(&p0)));
+    }
+
+    #[test]
+    fn a_changed_key_queues_and_a_newer_key_replaces_it() {
+        let p0 = Project::default();
+        let mut a = AudioPreview::new();
+        a.mixed = Some(MixKey::of(&p0));
+        let mut p1 = p0.clone();
+        p1.style.audio.mute_mic = true;
+        rebuilt(&mut a, &p1);
+        assert!(a.request.as_ref().is_some_and(|r| r.1.style.audio.mute_mic));
+        let mut p2 = p1.clone();
+        p2.style.audio.mute_system = true;
+        rebuilt(&mut a, &p2);
+        assert!(a.request.as_ref().is_some_and(|r| r.1.style.audio.mute_system));
+    }
+
+    #[test]
+    fn a_volume_only_change_queues_nothing() {
+        let p0 = Project::default();
+        let mut a = AudioPreview::new();
+        a.mixed = Some(MixKey::of(&p0));
+        let mut p1 = p0.clone();
+        p1.style.audio.volume = 0.3;
+        rebuilt(&mut a, &p1);
+        assert!(!a.mixing());
     }
 }

@@ -15,7 +15,7 @@ use super::theme::{self, pal};
 use super::widgets::{self, fmt_time};
 use super::{inspector, timeline};
 use crate::export::{self, Job, Source, Stats};
-use crate::project::model::{Codec, ExportFormat, ExportSettings, Project, Quality, Slice, Zoom};
+use crate::project::model::{Codec, ExportFormat, ExportSettings, FormatMemory, Project, Quality, Slice, Zoom};
 use crate::project::recording::Recording;
 use crate::project::Package;
 use crate::render::Gpu;
@@ -53,9 +53,10 @@ impl Tab {
 }
 
 /// Leaving the editor any way (back to the library, opening another project,
-/// quitting) finishes a voice-over in progress and saves.
+/// quitting) cancels a running export, finishes a voice-over in progress and saves.
 impl Drop for Editor {
     fn drop(&mut self) {
+        self.cancel_export();
         if self.voice.is_some() {
             self.stop_voiceover();
         }
@@ -123,6 +124,8 @@ pub struct Editor {
     redo: Vec<Project>,
     last_commit: Option<Instant>,
     dirty_at: Option<Instant>,
+    /// Export settings per format; they are not part of the undo history.
+    export_memory: FormatMemory,
     pub export: ExportState,
     /// Timeline pixels per second.
     pub px_per_sec: f32,
@@ -178,6 +181,7 @@ impl Editor {
                 *peaks.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
             });
         }
+        let export_memory = FormatMemory::new(project.export);
         Ok(Editor {
             package,
             project,
@@ -192,6 +196,7 @@ impl Editor {
             redo: vec![],
             last_commit: None,
             dirty_at: None,
+            export_memory,
             export: ExportState::default(),
             px_per_sec: 80.0,
             status: None,
@@ -270,21 +275,31 @@ impl Editor {
     }
 
     pub fn undo(&mut self) {
-        if let Some(p) = self.undo.pop() {
+        if let Some(mut p) = self.undo.pop() {
             self.redo.push(self.project.clone());
             self.last_commit = None;
+            p.export = self.project.export;
             self.apply(p);
         }
     }
 
     pub fn redo(&mut self) {
-        if let Some(p) = self.redo.pop() {
+        if let Some(mut p) = self.redo.pop() {
             self.undo.push(self.project.clone());
             self.last_commit = None;
+            p.export = self.project.export;
             self.apply(p);
         }
     }
 
+    /// Change the export settings. They are saved with the project but are
+    /// not an edit: no undo step, and undo and redo leave them as they are.
+    pub fn set_export(&mut self, s: ExportSettings) {
+        if s != self.project.export {
+            self.project.export = s;
+            self.dirty_at = Some(Instant::now());
+        }
+    }
     pub fn edit(&mut self, f: impl FnOnce(&mut Project)) {
         let mut d = self.project.clone();
         f(&mut d);
@@ -297,6 +312,13 @@ impl Editor {
             self.status = Some(format!("Couldn't save: {e}"));
         }
         self.dirty_at = None;
+    }
+
+    /// Write edits that autosave has not reached yet.
+    pub fn flush(&mut self) {
+        if self.dirty_at.is_some() {
+            self.save();
+        }
     }
 
     pub fn toggle_play(&mut self) {
@@ -347,6 +369,28 @@ impl Editor {
         });
     }
 
+    /// Split zoom `id` of `p` at the playhead. Says why when it can't
+    /// (the playhead has to be at least the minimum zoom length inside it).
+    pub fn split_zoom_in(&mut self, p: &mut Project, id: u64) -> bool {
+        let src = self.source_at_playhead();
+        let split = p.timeline.split_zoom(id, src).is_some();
+        if !split {
+            self.status = Some(format!("Put the playhead at least {:.1} s inside the zoom to split it", Zoom::MIN_LEN_MS / 1000.0));
+        }
+        split
+    }
+
+    /// Split the selected zoom at the playhead (⇧S).
+    pub fn split_zoom(&mut self) {
+        if let Selection::Zoom(id) = self.selection {
+            let mut draft = self.project.clone();
+            if self.split_zoom_in(&mut draft, id) {
+                self.last_commit = None;
+                self.commit(draft);
+            }
+        }
+    }
+
     /// Cut a range where content under a mask moved out of the edit.
     pub fn cut_exposure(&mut self, e: crate::exposure::Exposure) {
         let duration = self.preview.scene.map.source_end();
@@ -395,15 +439,9 @@ impl Editor {
     /// Add a zoom at the playhead.
     pub fn add_zoom(&mut self) {
         let src = self.source_at_playhead();
-        let end_limit = self.rec.meta.duration_ms;
+        let duration = self.rec.meta.duration_ms;
         let mut new_id = 0;
-        self.edit(|p| {
-            let id = p.timeline.new_id();
-            new_id = id;
-            let start = src.max(0.0);
-            let end = (start + 2500.0).min(end_limit);
-            p.timeline.zooms.push(Zoom { id, start, end, scale: p.style.default_zoom, ..Default::default() });
-        });
+        self.edit(|p| new_id = p.timeline.add_zoom(src, p.style.default_zoom, duration));
         self.selection = Selection::Zoom(new_id);
     }
 
@@ -452,15 +490,9 @@ impl Editor {
     /// Add a blur mask at the playhead.
     pub fn add_mask(&mut self) {
         let src = self.source_at_playhead();
-        let end_limit = self.rec.meta.duration_ms;
+        let duration = self.rec.meta.duration_ms;
         let mut new_id = 0;
-        self.edit(|p| {
-            let id = p.timeline.new_id();
-            new_id = id;
-            let start = src.max(0.0);
-            let end = (start + 3000.0).min(end_limit);
-            p.timeline.masks.push(crate::project::model::Mask { id, start, end, ..Default::default() });
-        });
+        self.edit(|p| new_id = p.timeline.add_mask(src, duration));
         self.selection = Selection::Mask(new_id);
     }
 
@@ -542,7 +574,24 @@ impl Editor {
         let _ = v2;
     }
 
+    /// Whether an export started from this editor is still running.
+    pub fn export_running(&self) -> bool {
+        self.export.running.is_some()
+    }
+    /// Stop a running export and wait for its thread, which removes its temp
+    /// file. A cancelled run leaves nothing at the output path and shows no
+    /// result. A run that had already finished keeps its file and its result.
+    pub fn cancel_export(&mut self) {
+        if let Some(mut run) = self.export.running.take() {
+            run.cancel.store(true, Ordering::SeqCst);
+            self.export.result = run.handle.take().and_then(|handle| kept_after_cancel(handle.join(), &run.output));
+            self.copy_when_exported = false;
+        }
+    }
     pub fn start_export(&mut self) {
+        if self.export.running.is_some() {
+            return;
+        }
         let settings = self.project.export;
         let output = export::default_output(&self.package.root, &settings);
         let job = Job {
@@ -552,6 +601,9 @@ impl Editor {
             settings,
             output: output.clone(),
         };
+        if crate::export::audio::music_missing(Some(&self.package.root), &self.project.style.audio) {
+            self.status = Some("Music file missing: exporting without background music".into());
+        }
         let progress = Arc::new(AtomicU64::new(0f64.to_bits()));
         let cancel = Arc::new(AtomicBool::new(false));
         let (p2, c2) = (progress.clone(), cancel.clone());
@@ -606,12 +658,7 @@ impl Editor {
             && run.handle.as_ref().is_some_and(|h| h.is_finished())
         {
             let r = run.handle.take().unwrap().join();
-            let out = run.output.clone();
-            self.export.result = Some(match r {
-                Ok(Ok(stats)) => Ok((out, stats)),
-                Ok(Err(e)) => Err(format!("{e:#}")),
-                Err(_) => Err("export crashed".into()),
-            });
+            self.export.result = Some(run_result(r, &run.output));
             self.export.running = None;
             if self.copy_when_exported {
                 self.copy_when_exported = false;
@@ -668,7 +715,7 @@ impl Editor {
         if cmd && pressed(egui::Key::Z) {
             if shift { self.redo() } else { self.undo() }
         } else if pressed(egui::Key::S) && !cmd {
-            self.split();
+            if shift { self.split_zoom() } else { self.split() }
         } else if pressed(egui::Key::Z) && !cmd {
             self.add_zoom();
         }
@@ -896,17 +943,23 @@ impl Editor {
         }
     }
 
+    /// The zoom target (normalised in the cropped screen) under a point of
+    /// the preview, given as a fraction of its width and height. It goes back
+    /// through the window as drawn right now, zoom and inset included, so it
+    /// names the pixel the user sees under the pointer.
+    pub fn zoom_target_at(&self, at: egui::Vec2) -> Option<crate::engine::geom::Vec2> {
+        let f = self.preview.last_frame.as_ref()?;
+        let scene = &self.preview.scene;
+        let p = scene.output_to_screen(crate::engine::geom::v2(at.x as f64 * f.size.x, at.y as f64 * f.size.y), f.window.rect);
+        let t = scene.sizes.crop.scalar_of(p);
+        Some(crate::engine::geom::v2(t.x.clamp(0.0, 1.0), t.y.clamp(0.0, 1.0)))
+    }
+
     fn pick_zoom_target(&mut self, id: u64, at: egui::Vec2) {
-        // Map the click from output space back to the unzoomed screen.
-        let sizes = self.preview.scene.sizes;
-        let out = egui::vec2(sizes.output.x as f32, sizes.output.y as f32);
-        let px = egui::vec2(at.x * out.x, at.y * out.y);
-        let body = sizes.default_body();
-        let x = ((px.x as f64 - sizes.pad - body.x) / body.w).clamp(0.0, 1.0);
-        let y = ((px.y as f64 - sizes.pad - body.y) / body.h).clamp(0.0, 1.0);
+        let Some(target) = self.zoom_target_at(at) else { return };
         self.edit(|p| {
             if let Some(z) = p.timeline.zooms.iter_mut().find(|z| z.id == id) {
-                z.mode = crate::project::model::ZoomMode::Manual { target: crate::engine::geom::v2(x, y) };
+                z.mode = crate::project::model::ZoomMode::Manual { target };
             }
         });
     }
@@ -933,16 +986,9 @@ impl Editor {
             }
             if self.rec.meta.camera.is_some() && ui.button("+ Layout").clicked() {
                 let src = self.source_at_playhead();
-                let dur_src = self.rec.meta.duration_ms;
+                let duration = self.rec.meta.duration_ms;
                 self.edit(|p| {
-                    let id = p.timeline.new_id();
-                    p.timeline.layouts.push(crate::project::model::LayoutRange {
-                        id,
-                        start: src,
-                        end: (src + 3000.0).min(dur_src).max(src),
-                        kind: crate::project::model::LayoutKind::CameraOnly,
-                        ..Default::default()
-                    });
+                    p.timeline.add_layout(src, duration);
                 });
             }
             if ui.add_enabled(self.selection != Selection::None, egui::Button::new("Delete")).clicked() {
@@ -971,7 +1017,7 @@ impl Editor {
                         let before = s.format;
                         widgets::segmented(ui, &mut s.format, &[(ExportFormat::Gif, "GIF"), (ExportFormat::Mp4, "MP4")]);
                         if s.format != before {
-                            s = if s.format == ExportFormat::Gif { ExportSettings::gif_default() } else { ExportSettings::default() };
+                            s = self.export_memory.switch(self.project.export, s.format);
                         }
                     });
                     let (heights, fpss): (&[u32], &[u32]) = match s.format {
@@ -1029,11 +1075,7 @@ impl Editor {
                         widgets::caption(ui, &format!("This Mac's video encoder can't take {rw}×{rh}, so it exports at {w}×{h}"));
                     }
                 });
-                if s != self.project.export {
-                    let mut d = self.project.clone();
-                    d.export = s;
-                    self.commit(d);
-                }
+                self.set_export(s);
                 ui.add_space(8.0);
                 if let Some(run) = &self.export.running {
                     let f = run.progress();
@@ -1095,5 +1137,36 @@ fn res_label(h: u32) -> String {
         2160 => "4K".into(),
         1440 => "1440p (2K)".into(),
         _ => format!("{h}p"),
+    }
+}
+
+/// What a joined export thread produced, as the export sheet shows it.
+fn run_result(r: std::thread::Result<Result<Stats>>, output: &Path) -> Result<(PathBuf, Stats), String> {
+    match r {
+        Ok(Ok(stats)) => Ok((output.to_path_buf(), stats)),
+        Ok(Err(e)) => Err(format!("{e:#}")),
+        Err(_) => Err("export crashed".into()),
+    }
+}
+/// The result to keep when an export is cancelled: only a run that had already finished.
+fn kept_after_cancel(r: std::thread::Result<Result<Stats>>, output: &Path) -> Option<Result<(PathBuf, Stats), String>> {
+    run_result(r, output).ok().map(Ok)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn stats() -> Stats {
+        Stats { frames: 1, width: 2, height: 2, seconds: 0.0, video_seconds: 1.0, bytes: 1 }
+    }
+    #[test]
+    fn a_run_that_finished_before_the_cancel_keeps_its_result() {
+        let kept = kept_after_cancel(Ok(Ok(stats())), Path::new("/m/Demo.mp4"));
+        assert!(matches!(kept, Some(Ok((p, _))) if p == Path::new("/m/Demo.mp4")));
+    }
+    #[test]
+    fn a_cancelled_or_crashed_run_keeps_nothing() {
+        let out = Path::new("/m/Demo.mp4");
+        assert!(kept_after_cancel(Ok(Err(anyhow::anyhow!("cancelled"))), out).is_none());
+        assert!(kept_after_cancel(Err(Box::new("boom")), out).is_none());
     }
 }

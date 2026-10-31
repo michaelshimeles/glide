@@ -55,7 +55,7 @@ Milestones and parity track the checklist in `analysis/SCREEN_STUDIO.md`.
 | E4 | GIF | ☑ | Parallel NeuQuant palettes, delta frames (only changed tiles, transparent elsewhere), duplicate merging, loop option. |
 | E5 | Targets | ✗ | File, clipboard, reveal in Finder. No upload/share links (no accounts). |
 | E6 | Presets / size estimate | ☑ | |
-| E7 | Progress, cancel, quick export | ☑ | "Export & copy" banner after recording. |
+| E7 | Progress, cancel, quick export | ☑ | "Export & copy" banner after recording. Quitting, going back, or opening another recording during an export asks before cancelling it. That includes a recording that finishes while an export runs. A recording that fails to open leaves the export running. |
 | E8 | Size-targeted export | ☑ | Not in Screen Studio 3.7.1; Glide's "Fit to file size" (MP4) stays at or under the target, re-encoding once if the first pass overshoots. |
 | P1 | Projects library | ☑ | `~/Movies/Glide`, autosave. Editor-first window (Micky's request): no separate library or New-recording screen; recent recordings (with rendered thumbnails) are a popover off the window title, plus Open… and the projects folder. |
 | P5 | Live source preview | ☑ | Recording setup shows the selected display, area or window live, filling the canvas under the Record button (Micky's request; Screen Studio does the same). Separate ScreenCaptureKit stream at 10 fps, 1280 px, cursor shown, Glide's own windows excluded; restarts when the source changes (after 300 ms of no edits), stops while recording, when the window is hidden, minimised or covered, and when a recording is open. iPhone sources show no preview. The GUI selftest checks frames arrive and that it's off while recording. |
@@ -67,7 +67,7 @@ Milestones and parity track the checklist in `analysis/SCREEN_STUDIO.md`.
 
 `scripts/selftest.sh --screen` (2026-10-12): 13/13 pass.
 
-- `cargo test` (92): engine, project, presets, renderer helpers, masks,
+- `cargo test` (251): engine, project, presets, renderer helpers, masks,
   device frames, typing detection, caption editing, transcription chunking,
   Whisper transcription of synthesized speech,
   hotkeys, timeline clamping and cuts, voice isolation, masked-content
@@ -77,7 +77,8 @@ Milestones and parity track the checklist in `analysis/SCREEN_STUDIO.md`.
   pixels back and compare them (and the exported frame) before and after,
   and audio tests (track levels and the silence note, the playback mix
   following mutes while open, the exported MP4 carrying the tone, tone
-  detection under louder sound).
+  detection under louder sound), a snapshot render, timeline pointer drags
+  and unreadable-project errors.
 - Synthetic package → MP4 and GIF.
 - Background check (`glide check-background`): 22 edits (each wallpaper,
   blur on and off, gradient, its angle and colours, two colours, an image,

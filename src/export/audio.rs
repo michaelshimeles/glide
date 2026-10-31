@@ -2,12 +2,12 @@
 //! with per-slice volumes, background music, click sounds and an optional
 //! microphone clean-up.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::capture::mixer::RATE;
 use crate::engine::events::Events;
 use crate::engine::timemap::TimeMap;
-use crate::project::model::Project;
+use crate::project::model::{AudioStyle, Project};
 use crate::project::recording::Recording;
 
 pub type Stereo = [f32; 2];
@@ -243,6 +243,18 @@ pub fn duck_envelope(len: usize, spans: &[(usize, usize)], level: f32) -> Vec<f3
     env
 }
 
+/// Where the music file is. Older projects hold an absolute path, which is used as is.
+pub fn music_path(dir: Option<&Path>, stored: &str) -> PathBuf {
+    let p = Path::new(stored);
+    match dir {
+        Some(d) if p.is_relative() => d.join(p),
+        _ => p.to_path_buf(),
+    }
+}
+/// Music is set but its file is gone (or isn't a file).
+pub fn music_missing(dir: Option<&Path>, style: &AudioStyle) -> bool {
+    style.music.as_ref().is_some_and(|m| !music_path(dir, m).is_file())
+}
 /// Build the export soundtrack. Returns None when there's nothing to hear.
 pub fn mix(project: &Project, rec: &Recording, dir: Option<&Path>, map: &TimeMap) -> Option<Vec<Stereo>> {
     let mut out = mix_unmastered(project, rec, dir, map)?;
@@ -312,7 +324,7 @@ pub fn mix_unmastered(project: &Project, rec: &Recording, dir: Option<&Path>, ma
         o[0] += v[0];
         o[1] += v[1];
     }
-    if let Some(music) = style.music.as_ref().and_then(|p| crate::media::read_audio(Path::new(p), 0).ok()).filter(|m| !m.is_empty()) {
+    if let Some(music) = style.music.as_ref().and_then(|p| crate::media::read_audio(&music_path(dir, p), 0).ok()).filter(|m| !m.is_empty()) {
         let g = style.music_volume as f32;
         // Fade the music out over the last second.
         let n = out.len();
@@ -349,6 +361,32 @@ mod tests {
     use super::*;
     use crate::project::model::Slice;
 
+    #[test]
+    fn a_relative_music_path_resolves_inside_the_package() {
+        let dir = Path::new("/pkg/Demo.glide");
+        assert_eq!(music_path(Some(dir), "assets/music-1.mp3"), dir.join("assets/music-1.mp3"));
+        assert_eq!(music_path(None, "assets/music-1.mp3"), Path::new("assets/music-1.mp3"));
+    }
+    #[test]
+    fn an_old_absolute_music_path_resolves_as_it_is() {
+        let dir = Path::new("/pkg/Demo.glide");
+        assert_eq!(music_path(Some(dir), "/Users/me/Music/song.mp3"), Path::new("/Users/me/Music/song.mp3"));
+    }
+    #[test]
+    fn music_missing_is_true_for_an_absent_file_or_a_folder_and_false_for_a_file_or_no_music() {
+        let root = std::env::temp_dir().join(format!("glide-music-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("assets/folder")).unwrap();
+        std::fs::write(root.join("assets/song.wav"), b"x").unwrap();
+        let with = |m: Option<&str>| AudioStyle { music: m.map(String::from), ..Default::default() };
+        let dir = Some(root.as_path());
+        assert!(!music_missing(dir, &with(None)));
+        assert!(!music_missing(dir, &with(Some("assets/song.wav"))));
+        assert!(!music_missing(None, &with(Some(root.join("assets/song.wav").to_str().unwrap()))));
+        assert!(music_missing(dir, &with(Some("assets/gone.wav"))));
+        assert!(music_missing(dir, &with(Some("assets/folder"))));
+        let _ = std::fs::remove_dir_all(&root);
+    }
     #[test]
     fn retime_follows_cuts_and_speed() {
         // 2 s ramp at 48 kHz; keep 0..0.5 s and 1..2 s at 2x.

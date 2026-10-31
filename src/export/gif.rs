@@ -15,8 +15,10 @@ use super::{FramePump, Inputs, Job, ProgressFn};
 use crate::engine::scene::Scene;
 use crate::project::model::Quality;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn encode(
     job: &Job,
+    out: &std::path::Path,
     scene: &mut Scene,
     pump: &mut FramePump,
     inputs: &mut Inputs,
@@ -29,7 +31,7 @@ pub(super) fn encode(
     if w > u16::MAX as u32 || h > u16::MAX as u32 {
         bail!("GIF too large");
     }
-    let file = File::create(&job.output).with_context(|| format!("creating {}", job.output.display()))?;
+    let file = File::create(out).with_context(|| format!("creating {}", out.display()))?;
     let mut enc = gif::Encoder::new(BufWriter::new(file), w as u16, h as u16, &[])?;
     enc.set_repeat(if s.gif_loop { gif::Repeat::Infinite } else { gif::Repeat::Finite(0) })?;
     // Lower is slower and better; Studio spends more time per frame.
@@ -116,7 +118,6 @@ pub(super) fn encode(
     for i in 0..total {
         if cancel.load(Ordering::SeqCst) {
             drop(job_tx);
-            let _ = std::fs::remove_file(&job.output);
             bail!("export cancelled");
         }
         let frame = scene.frame(i as f64 * 1000.0 / s.fps as f64, h as f64);

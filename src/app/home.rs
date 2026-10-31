@@ -176,6 +176,26 @@ pub struct WindowEntry {
     pub display: (f64, f64),
 }
 
+/// What the sidebar and the canvas say while no iPhone or iPad is listed.
+pub const IOS_CONNECT_HINT: &str = "Connect an iPhone or iPad with a cable, unlock it and trust this Mac.";
+
+/// The saved iPhone/iPad choice after looking at what is connected: kept when
+/// it is listed, else the first listed one. With nothing listed the saved id
+/// stays, since the list is empty for the first seconds after launch and the
+/// pick shouldn't be thrown away.
+pub fn repair_ios_choice(current: Option<&str>, listed: &[Device]) -> Option<String> {
+    match current {
+        Some(c) if listed.iter().any(|d| d.id == c) => Some(c.to_owned()),
+        _ => listed.first().map(|d| d.id.clone()).or_else(|| current.map(str::to_owned)),
+    }
+}
+
+/// The saved iPhone/iPad, only if it is in the list. An id that discovery
+/// hasn't returned would fail with "no longer connected", so it isn't previewed.
+pub fn listed_ios_id(saved: Option<&str>, listed: &[Device]) -> Option<String> {
+    saved.filter(|id| listed.iter().any(|d| d.id == *id)).map(str::to_owned)
+}
+
 #[derive(Default)]
 pub struct Devices {
     pub displays: Vec<(u32, String)>,
@@ -407,6 +427,9 @@ pub enum Action {
     ResizeWindow { id: u32, width: u32, height: u32 },
     /// Pick a window on screen.
     SelectWindow,
+    /// Ask again which iPhones and iPads are connected, and retry a preview
+    /// that failed.
+    RefreshIos,
     /// Remember the settings now (e.g. the camera bubble was restyled).
     SaveSettings,
 }
@@ -605,17 +628,15 @@ pub fn record_settings(ui: &mut Ui, s: &mut Settings, dev: &mut Devices, permiss
             }
         }
         SourceKind::Device => {
+            s.ios_device = repair_ios_choice(s.ios_device.as_deref(), &dev.ios);
             if dev.ios.is_empty() {
-                caption(ui, "Connect an iPhone or iPad with a cable, unlock it and trust this Mac.");
+                caption(ui, IOS_CONNECT_HINT);
             } else {
-                if s.ios_device.as_ref().is_none_or(|id| !dev.ios.iter().any(|d| &d.id == id)) {
-                    s.ios_device = dev.ios.first().map(|d| d.id.clone());
-                }
                 let devices: Vec<_> = dev.ios.iter().map(|d| (Some(d.id.clone()), d.name.clone())).collect();
                 combo(ui, "ios", &mut s.ios_device, &devices, true);
             }
             if ui.small_button("Refresh").clicked() {
-                *dev = Devices::load();
+                action = Action::RefreshIos;
             }
         }
         SourceKind::Area => {
@@ -908,8 +929,7 @@ fn bubble_rect(style: &crate::project::model::CameraStyle, frame: egui::Rect, ca
 fn outline_mesh(pts: &[egui::Pos2], c: egui::Pos2, tex: egui::TextureId, color: Color32, uv: impl Fn(egui::Pos2) -> egui::Pos2) -> egui::Mesh {
     let mut m = egui::Mesh::with_texture(tex);
     let n = pts.len() as u32;
-    m.colored_vertex(c, color);
-    m.vertices[0].uv = uv(c);
+    m.vertices.push(egui::epaint::Vertex { pos: c, uv: uv(c), color });
     for (i, &p) in pts.iter().enumerate() {
         let (prev, next) = (pts[(i + pts.len() - 1) % pts.len()], pts[(i + 1) % pts.len()]);
         let t = next - prev;
@@ -1176,5 +1196,38 @@ mod tests {
         dev.windows.clear();
         assert!(!s.resolve_window(&dev));
         assert_eq!(s.window, Some(7));
+    }
+
+    fn phone(id: &str) -> Device {
+        Device { id: id.into(), name: format!("{id} phone") }
+    }
+
+    #[test]
+    fn repair_ios_choice_keeps_a_listed_pick() {
+        assert_eq!(repair_ios_choice(Some("b"), &[phone("a"), phone("b")]).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn repair_ios_choice_replaces_a_stale_pick_with_the_first_listed() {
+        assert_eq!(repair_ios_choice(Some("old"), &[phone("a"), phone("b")]).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn repair_ios_choice_keeps_the_pick_while_nothing_is_listed() {
+        assert_eq!(repair_ios_choice(Some("old"), &[]).as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn repair_ios_choice_picks_the_first_when_none_was_saved() {
+        assert_eq!(repair_ios_choice(None, &[phone("a")]).as_deref(), Some("a"));
+        assert_eq!(repair_ios_choice(None, &[]), None);
+    }
+
+    #[test]
+    fn listed_ios_id_never_returns_an_id_discovery_did_not_list() {
+        assert_eq!(listed_ios_id(Some("old"), &[]), None);
+        assert_eq!(listed_ios_id(Some("old"), &[phone("a")]), None);
+        assert_eq!(listed_ios_id(Some("a"), &[phone("a")]).as_deref(), Some("a"));
+        assert_eq!(listed_ios_id(None, &[phone("a")]), None);
     }
 }

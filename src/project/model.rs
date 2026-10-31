@@ -354,6 +354,7 @@ pub struct AudioStyle {
     pub mute_system: bool,
     /// Gentle denoise + level for the microphone track.
     pub enhance_mic: bool,
+    /// Background music: `assets/...` inside the package, or an absolute path in older projects.
     pub music: Option<String>,
     pub music_volume: f64,
     pub click_sounds: bool,
@@ -547,7 +548,30 @@ impl Default for Zoom {
 }
 
 impl Zoom {
-    pub const MIN_LEN_MS: f64 = 1000.0;
+    /// Shortest a zoom can be made by trimming or splitting.
+    pub const MIN_LEN_MS: f64 = 500.0;
+    /// Length of a zoom added at the playhead.
+    pub const DEFAULT_LEN_MS: f64 = 2500.0;
+
+    /// Move the start edge to `t`. The zoom keeps at least `MIN_LEN_MS` (one
+    /// already shorter than that can only grow) and stays inside the recording.
+    pub fn trim_start(&mut self, t: f64) {
+        let hi = (self.end - Self::MIN_LEN_MS).max(self.start).min(self.end);
+        self.start = t.clamp(0.0, hi.max(0.0));
+    }
+
+    /// Move the end edge to `t`, for a recording `duration` ms long.
+    pub fn trim_end(&mut self, t: f64, duration: f64) {
+        let lo = (self.start + Self::MIN_LEN_MS).min(self.end);
+        self.end = t.clamp(lo, duration.max(lo));
+    }
+
+    /// Move the whole zoom so it starts at `t`, keeping its length.
+    pub fn move_to(&mut self, t: f64, duration: f64) {
+        let len = self.end - self.start;
+        self.start = t.clamp(0.0, (duration - len).max(0.0));
+        self.end = self.start + len;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -575,6 +599,11 @@ impl Default for LayoutRange {
     fn default() -> Self {
         LayoutRange { id: 0, start: 0.0, end: 0.0, kind: LayoutKind::Both, camera_size: None, camera_position: None }
     }
+}
+impl LayoutRange {
+    /// Length of a layout added at the playhead.
+    pub const DEFAULT_LEN_MS: f64 = 3000.0;
+    pub const MIN_LEN_MS: f64 = 300.0;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -616,6 +645,8 @@ impl Mask {
     /// Fade in/out time at the ends of the range.
     pub const FADE_MS: f64 = 150.0;
     pub const MIN_LEN_MS: f64 = 300.0;
+    /// Length of a mask added at the playhead.
+    pub const DEFAULT_LEN_MS: f64 = 3000.0;
 
     pub fn default_amount(kind: MaskKind) -> f64 {
         match kind {
@@ -659,6 +690,15 @@ impl Default for VoiceOver {
     }
 }
 
+/// Where a `len` ms range added at `at` goes in a `duration` ms recording:
+/// inside it, and at least `min` long (it starts earlier when `at` is too
+/// close to the end). A recording shorter than `len` gets all of it.
+pub fn span_at(at: f64, len: f64, min: f64, duration: f64) -> (f64, f64) {
+    let duration = duration.max(0.0);
+    let (len, min) = (len.min(duration), min.min(duration));
+    let start = at.clamp(0.0, (duration - min).max(0.0));
+    (start, (start + len).min(duration))
+}
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Timeline {
@@ -674,6 +714,44 @@ impl Timeline {
     pub fn new_id(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
+    }
+
+    /// Add a zoom starting at source time `at`, `Zoom::DEFAULT_LEN_MS` long
+    /// but never past the end of a `duration` ms recording or shorter than
+    /// `Zoom::MIN_LEN_MS` (it starts earlier when `at` is too close to the end).
+    pub fn add_zoom(&mut self, at: f64, scale: f64, duration: f64) -> u64 {
+        let id = self.new_id();
+        let (start, end) = span_at(at, Zoom::DEFAULT_LEN_MS, Zoom::MIN_LEN_MS, duration);
+        self.zooms.push(Zoom { id, start, end, scale, ..Default::default() });
+        id
+    }
+    /// Add a mask at source time `at`, placed like `add_zoom`.
+    pub fn add_mask(&mut self, at: f64, duration: f64) -> u64 {
+        let id = self.new_id();
+        let (start, end) = span_at(at, Mask::DEFAULT_LEN_MS, Mask::MIN_LEN_MS, duration);
+        self.masks.push(Mask { id, start, end, ..Default::default() });
+        id
+    }
+    /// Add a camera-only layout at source time `at`, placed like `add_zoom`.
+    pub fn add_layout(&mut self, at: f64, duration: f64) -> u64 {
+        let id = self.new_id();
+        let (start, end) = span_at(at, LayoutRange::DEFAULT_LEN_MS, LayoutRange::MIN_LEN_MS, duration);
+        self.layouts.push(LayoutRange { id, start, end, kind: LayoutKind::CameraOnly, ..Default::default() });
+        id
+    }
+    /// Split zoom `id` at source time `t` into two that share its settings.
+    /// Each half keeps at least `Zoom::MIN_LEN_MS`. Returns the id of the new
+    /// second half, or None when `t` is too close to an end (or no such zoom).
+    pub fn split_zoom(&mut self, id: u64, t: f64) -> Option<u64> {
+        let i = self.zooms.iter().position(|z| z.id == id)?;
+        let z = self.zooms[i];
+        if t < z.start + Zoom::MIN_LEN_MS || t > z.end - Zoom::MIN_LEN_MS {
+            return None;
+        }
+        let new = self.new_id();
+        self.zooms[i].end = t;
+        self.zooms.insert(i + 1, Zoom { id: new, start: t, ..z });
+        Some(new)
     }
 }
 
@@ -770,11 +848,58 @@ impl Default for ExportSettings {
     }
 }
 
+/// The last settings used for each export format, so switching MP4 to GIF
+/// and back brings each side back as it was left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FormatMemory {
+    mp4: ExportSettings,
+    gif: ExportSettings,
+}
+impl FormatMemory {
+    /// Remember `current` for its format; the other starts at its defaults.
+    pub fn new(current: ExportSettings) -> Self {
+        let mut m = FormatMemory { mp4: ExportSettings::default(), gif: ExportSettings::gif_default() };
+        m.remember(current);
+        m
+    }
+    pub fn remember(&mut self, s: ExportSettings) {
+        match s.format {
+            ExportFormat::Mp4 => self.mp4 = s,
+            ExportFormat::Gif => self.gif = s,
+        }
+    }
+    pub fn recall(&self, format: ExportFormat) -> ExportSettings {
+        match format {
+            ExportFormat::Mp4 => self.mp4,
+            ExportFormat::Gif => self.gif,
+        }
+    }
+    /// Leave the format of `leaving` (remembering it) for `to`.
+    pub fn switch(&mut self, leaving: ExportSettings, to: ExportFormat) -> ExportSettings {
+        self.remember(leaving);
+        self.recall(to)
+    }
+}
 impl ExportSettings {
     pub const MP4_FPS: [u32; 7] = [60, 50, 30, 25, 24, 20, 10];
     pub const GIF_FPS: [u32; 6] = [50, 30, 25, 20, 15, 10];
     /// `height` for the recording's native resolution.
     pub const NATIVE: u32 = 0;
+    pub const MIN_FPS: u32 = 1;
+    pub const MAX_FPS: u32 = 120;
+    /// The tallest export Glide accepts (8K is 4320; this leaves room for portrait aspects).
+    pub const MAX_HEIGHT: u32 = 8640;
+    /// These settings with values the encoder can't take brought into range: a frame rate
+    /// outside 1..=120, a height above [`Self::MAX_HEIGHT`] and a target size of 0 MB. A
+    /// hand-edited `project.json` can hold any of them.
+    pub fn sanitized(self) -> Self {
+        ExportSettings {
+            fps: self.fps.clamp(Self::MIN_FPS, Self::MAX_FPS),
+            height: self.height.min(Self::MAX_HEIGHT),
+            target_mb: self.target_mb.filter(|mb| *mb > 0),
+            ..self
+        }
+    }
     pub const MP4_HEIGHTS: [u32; 5] = [Self::NATIVE, 2160, 1440, 1080, 720];
     pub const GIF_HEIGHTS: [u32; 3] = [480, 720, 1080];
 
@@ -900,5 +1025,176 @@ mod tests {
         assert_eq!(e.codec_for(4654, 3200), Codec::Hevc);
         assert_eq!(e.codec_for(2160, 3840), Codec::H264);
         assert_eq!(ExportSettings { codec: Codec::Hevc, ..e }.codec_for(1280, 720), Codec::Hevc);
+    }
+
+    #[test]
+    fn sanitized_export_settings_stay_inside_what_the_encoder_takes() {
+        let bad = ExportSettings { fps: 0, height: 999_999, target_mb: Some(0), ..Default::default() };
+        let ok = bad.sanitized();
+        assert_eq!((ok.fps, ok.height, ok.target_mb), (ExportSettings::MIN_FPS, ExportSettings::MAX_HEIGHT, None));
+        let high = ExportSettings { fps: 500, ..Default::default() }.sanitized();
+        assert_eq!(high.fps, ExportSettings::MAX_FPS);
+    }
+    #[test]
+    fn sanitized_export_settings_keep_valid_values() {
+        for fps in ExportSettings::MP4_FPS.into_iter().chain(ExportSettings::GIF_FPS) {
+            let e = ExportSettings { fps, height: ExportSettings::NATIVE, target_mb: Some(10), ..Default::default() };
+            assert_eq!(e.sanitized(), e, "fps {fps}");
+        }
+        for height in ExportSettings::MP4_HEIGHTS.into_iter().chain(ExportSettings::GIF_HEIGHTS) {
+            let e = ExportSettings { height, ..Default::default() };
+            assert_eq!(e.sanitized(), e, "height {height}");
+        }
+    }
+    fn zoom(start: f64, end: f64) -> Zoom {
+        Zoom { id: 1, start, end, ..Default::default() }
+    }
+
+    #[test]
+    fn trimming_a_zoom_keeps_it_inside_the_recording_and_above_the_minimum() {
+        let mut z = zoom(2000.0, 4000.0);
+        z.trim_start(-500.0);
+        assert_eq!(z.start, 0.0);
+        z.trim_start(9000.0);
+        assert_eq!(z.start, 4000.0 - Zoom::MIN_LEN_MS);
+        z.trim_end(0.0, 10_000.0);
+        assert_eq!(z.end, z.start + Zoom::MIN_LEN_MS);
+        z.trim_end(99_000.0, 10_000.0);
+        assert_eq!(z.end, 10_000.0);
+        assert!(z.end - z.start >= Zoom::MIN_LEN_MS);
+    }
+
+    #[test]
+    fn a_zoom_shorter_than_the_minimum_can_grow_but_not_shrink() {
+        let mut z = zoom(1000.0, 1200.0);
+        z.trim_start(1150.0);
+        assert_eq!(z.start, 1000.0);
+        z.trim_end(1050.0, 5000.0);
+        assert_eq!(z.end, 1200.0);
+        z.trim_start(200.0);
+        z.trim_end(3000.0, 5000.0);
+        assert_eq!((z.start, z.end), (200.0, 3000.0));
+        // One past the end of a short recording is pulled back in, never inverted.
+        let mut z = zoom(100.0, 400.0);
+        z.trim_end(900.0, 300.0);
+        assert!(z.end >= z.start);
+    }
+
+    #[test]
+    fn moving_a_zoom_keeps_its_length_and_stays_inside() {
+        let mut z = zoom(2000.0, 4000.0);
+        z.move_to(-300.0, 10_000.0);
+        assert_eq!((z.start, z.end), (0.0, 2000.0));
+        z.move_to(9500.0, 10_000.0);
+        assert_eq!((z.start, z.end), (8000.0, 10_000.0));
+        // Longer than the recording: pinned at the start rather than panicking.
+        let mut z = zoom(0.0, 3000.0);
+        z.move_to(500.0, 2000.0);
+        assert_eq!(z.start, 0.0);
+    }
+
+    #[test]
+    fn switching_format_and_back_keeps_each_sides_settings() {
+        let mp4 = ExportSettings { height: 1080, fps: 30, quality: Quality::Web, codec: Codec::Hevc, target_mb: Some(20), ..Default::default() };
+        let mut mem = FormatMemory::new(mp4);
+        let gif = mem.switch(mp4, ExportFormat::Gif);
+        assert_eq!(gif, ExportSettings::gif_default());
+        let edited = ExportSettings { fps: 10, height: 360, gif_loop: false, ..gif };
+        assert_eq!(mem.switch(edited, ExportFormat::Mp4), mp4);
+        assert_eq!(mem.switch(mp4, ExportFormat::Gif), edited);
+    }
+    #[test]
+    fn a_new_memory_offers_the_other_formats_defaults() {
+        let mem = FormatMemory::new(ExportSettings::default());
+        assert_eq!(mem.recall(ExportFormat::Gif), ExportSettings::gif_default());
+        let gif = ExportSettings { fps: 10, ..ExportSettings::gif_default() };
+        let mem = FormatMemory::new(gif);
+        assert_eq!(mem.recall(ExportFormat::Gif), gif);
+        assert_eq!(mem.recall(ExportFormat::Mp4), ExportSettings::default());
+    }
+    #[test]
+    fn span_at_start_of_the_recording() {
+        assert_eq!(span_at(0.0, 3000.0, 300.0, 10_000.0), (0.0, 3000.0));
+    }
+    #[test]
+    fn span_at_the_middle() {
+        assert_eq!(span_at(4000.0, 3000.0, 300.0, 10_000.0), (4000.0, 7000.0));
+    }
+    #[test]
+    fn span_at_exactly_the_end() {
+        assert_eq!(span_at(10_000.0, 3000.0, 300.0, 10_000.0), (9700.0, 10_000.0));
+    }
+    #[test]
+    fn span_past_the_end_is_pulled_back() {
+        assert_eq!(span_at(15_000.0, 3000.0, 300.0, 10_000.0), (9700.0, 10_000.0));
+    }
+    #[test]
+    fn span_before_the_start_is_pushed_forward() {
+        assert_eq!(span_at(-50.0, 3000.0, 300.0, 10_000.0), (0.0, 3000.0));
+    }
+    #[test]
+    fn a_recording_shorter_than_the_default_length_gets_the_whole_recording() {
+        assert_eq!(span_at(0.0, 3000.0, 300.0, 1000.0), (0.0, 1000.0));
+        assert_eq!(span_at(100.0, 3000.0, 300.0, 200.0), (0.0, 200.0));
+    }
+    #[test]
+    fn added_masks_and_layouts_are_never_zero_length_at_the_end() {
+        let mut tl = Timeline::default();
+        let m = tl.add_mask(10_000.0, 10_000.0);
+        let l = tl.add_layout(15_000.0, 10_000.0);
+        let mask = *tl.masks.iter().find(|x| x.id == m).unwrap();
+        let layout = *tl.layouts.iter().find(|x| x.id == l).unwrap();
+        assert_eq!((mask.start, mask.end), (10_000.0 - Mask::MIN_LEN_MS, 10_000.0));
+        assert_eq!((layout.start, layout.end), (10_000.0 - LayoutRange::MIN_LEN_MS, 10_000.0));
+        assert_eq!(layout.kind, LayoutKind::CameraOnly);
+        let m = tl.add_mask(2000.0, 10_000.0);
+        let mask = *tl.masks.iter().find(|x| x.id == m).unwrap();
+        assert_eq!((mask.start, mask.end), (2000.0, 5000.0));
+    }
+    #[test]
+    fn added_zooms_never_run_past_the_end_or_below_the_minimum() {
+        let mut tl = Timeline::default();
+        let a = tl.add_zoom(1000.0, 2.0, 10_000.0);
+        let b = tl.add_zoom(9800.0, 2.0, 10_000.0);
+        let c = tl.add_zoom(10_000.0, 2.0, 10_000.0);
+        let get = |id| *tl.zooms.iter().find(|z| z.id == id).unwrap();
+        assert_eq!((get(a).start, get(a).end), (1000.0, 3500.0));
+        assert_eq!((get(b).start, get(b).end), (10_000.0 - Zoom::MIN_LEN_MS, 10_000.0));
+        assert_eq!(get(c).start, get(b).start);
+        assert!(tl.zooms.iter().all(|z| z.end - z.start >= Zoom::MIN_LEN_MS && z.end <= 10_000.0));
+        // A recording shorter than the minimum still gets a zoom inside it.
+        let mut tl = Timeline::default();
+        let id = tl.add_zoom(100.0, 2.0, 300.0);
+        assert_eq!((tl.zooms[0].id, tl.zooms[0].start, tl.zooms[0].end), (id, 0.0, 300.0));
+    }
+
+    #[test]
+    fn splitting_a_zoom_makes_two_that_share_its_settings() {
+        let mut tl = Timeline::default();
+        let id = tl.new_id();
+        let z = Zoom { id, start: 2000.0, end: 5000.0, scale: 3.0, instant: true, ..Default::default() };
+        tl.zooms.push(z);
+        let new = tl.split_zoom(id, 3500.0).unwrap();
+        assert_ne!(new, id);
+        assert_eq!(tl.zooms.len(), 2);
+        assert_eq!((tl.zooms[0].id, tl.zooms[0].start, tl.zooms[0].end), (id, 2000.0, 3500.0));
+        assert_eq!((tl.zooms[1].id, tl.zooms[1].start, tl.zooms[1].end), (new, 3500.0, 5000.0));
+        assert!(tl.zooms.iter().all(|z| z.scale == 3.0 && z.instant));
+    }
+
+    #[test]
+    fn a_zoom_wont_split_closer_to_an_end_than_the_minimum() {
+        let mut tl = Timeline::default();
+        let id = tl.new_id();
+        tl.zooms.push(Zoom { id, start: 2000.0, end: 4000.0, ..Default::default() });
+        let before = tl.clone();
+        for t in [1000.0, 2000.0, 2000.0 + Zoom::MIN_LEN_MS - 1.0, 4000.0 - Zoom::MIN_LEN_MS + 1.0, 4000.0, 9000.0] {
+            assert_eq!(tl.split_zoom(id, t), None, "{t}");
+        }
+        assert_eq!(tl.split_zoom(99, 3000.0), None);
+        assert_eq!(tl, before);
+        // The boundary itself is allowed: both halves are exactly the minimum.
+        let mut tl = before;
+        assert!(tl.split_zoom(id, 2000.0 + Zoom::MIN_LEN_MS).is_some());
     }
 }

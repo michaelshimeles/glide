@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: App (cargo test, clippy)
+    # The app needs macOS 15 or later to build; the SDK on this image has the frameworks it links.
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # scripts/env.sh keeps Cargo's output outside the repo and sets SDKROOT and the deployment
+      # target for the whisper.cpp build. Later steps need its variables, so export them.
+      - name: Build environment
+        run: |
+          . scripts/env.sh
+          {
+            echo "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+            echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
+            echo "SDKROOT=${SDKROOT:-}"
+          } >> "$GITHUB_ENV"
+          cmake --version | head -1
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ env.CARGO_TARGET_DIR }}
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Test
+        run: cargo test --no-fail-fast
+
+      # The code has existing clippy warnings, so this fails only on errors. Add -D warnings once
+      # they are cleared.
+      - name: Clippy
+        run: cargo clippy --all-targets
+
+  site:
+    name: Site (check, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build

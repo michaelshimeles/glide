@@ -10,6 +10,7 @@ pub mod render;
 pub mod synth;
 pub mod capture;
 pub mod util;
+pub mod diag;
 pub mod hw;
 pub mod media;
 pub mod export;

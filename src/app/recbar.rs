@@ -64,6 +64,8 @@ define_class!(
 pub enum State {
     /// Seconds left before capture starts.
     Countdown(u64),
+    /// The old take is being removed before a new one starts.
+    Restarting,
     Recording { clock: String, paused: bool },
 }
 
@@ -248,6 +250,15 @@ impl RecordBar {
         match state {
             State::Countdown(n) => {
                 self.timer.setStringValue(&ns(&format!("Starts in {n}")));
+                self.timer.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, unsafe { NSFontWeightSemibold })));
+                dot.setBackgroundColor(Some(&cg(&NSColor::systemGrayColor())));
+                pulse(&dot, false);
+                for b in [&self.pause, &self.restart, &self.stop] {
+                    b.setEnabled(false);
+                }
+            }
+            State::Restarting => {
+                self.timer.setStringValue(&ns("Restarting…"));
                 self.timer.setFont(Some(&NSFont::systemFontOfSize_weight(13.0, unsafe { NSFontWeightSemibold })));
                 dot.setBackgroundColor(Some(&cg(&NSColor::systemGrayColor())));
                 pulse(&dot, false);

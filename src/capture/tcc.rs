@@ -165,6 +165,62 @@ pub fn mic_status() -> Status {
     av_status(false)
 }
 
+/// What to do about Camera access before opening an iPhone/iPad screen. macOS
+/// may treat these muxed devices as cameras, and without a grant the session
+/// runs and delivers no frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gate {
+    Go,
+    /// Not asked yet: request it.
+    Ask,
+    /// Can't be used; the text says why and where to change it.
+    Blocked(&'static str),
+}
+
+pub const CAMERA_OFF: &str = "Camera access is off for Glide. Turn it on in System Settings > Privacy & Security > Camera.";
+pub const CAMERA_RESTRICTED: &str = "Camera access is restricted on this Mac. Check System Settings > Privacy & Security > Camera, or ask whoever manages this Mac.";
+pub const CAMERA_PENDING: &str = "Camera access hasn't been answered yet. Answer the prompt, then try again.";
+
+pub fn camera_gate(status: Status) -> Gate {
+    match status {
+        Status::Granted => Gate::Go,
+        Status::NotDetermined => Gate::Ask,
+        Status::Denied => Gate::Blocked(CAMERA_OFF),
+        Status::Restricted => Gate::Blocked(CAMERA_RESTRICTED),
+    }
+}
+
+/// Make sure Camera access is granted, asking if it hasn't been asked yet
+/// and waiting up to `wait` for the answer. Blocks: call it from a background
+/// thread. A denied or restricted grant fails at once without asking again.
+pub fn require_camera(wait: Duration) -> anyhow::Result<()> {
+    match camera_gate(camera_status()) {
+        Gate::Go => Ok(()),
+        Gate::Blocked(msg) => anyhow::bail!("{msg}"),
+        Gate::Ask => {
+            request_all(false, false, true, wait);
+            match camera_gate(camera_status()) {
+                Gate::Go => Ok(()),
+                Gate::Blocked(msg) => anyhow::bail!("{msg}"),
+                Gate::Ask => anyhow::bail!("{CAMERA_PENDING}"),
+            }
+        }
+    }
+}
+
+/// Like `require_camera`, for the UI thread: never waits. When the answer is
+/// still open it shows the prompt and fails, so the caller tries again.
+pub fn check_camera_now() -> anyhow::Result<()> {
+    match camera_gate(camera_status()) {
+        Gate::Go => Ok(()),
+        Gate::Blocked(msg) => anyhow::bail!("{msg}"),
+        Gate::Ask => {
+            drop(av_request_async(true));
+            anyhow::bail!("{CAMERA_PENDING}")
+        }
+    }
+}
+
 fn av_request_async(video: bool) -> mpsc::Receiver<bool> {
     let media = unsafe { if video { AVMediaTypeVideo } else { AVMediaTypeAudio } }.unwrap();
     let (tx, rx) = mpsc::channel();
@@ -191,12 +247,36 @@ pub fn request_all(screen: bool, mic: bool, camera: bool, wait: Duration) {
         let Some(rx) = rx else { continue };
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         match rx.recv_timeout(left) {
-            Ok(g) => eprintln!("{name}: {}", if g { "granted" } else { "denied" }),
-            Err(_) => eprintln!("{name}: prompt still pending (answer it on screen)"),
+            Ok(g) => crate::diag::note(&format!("{name}: {}", if g { "granted" } else { "denied" })),
+            Err(_) => crate::diag::note(&format!("{name}: prompt still pending (answer it on screen)")),
         }
     }
 }
 
 pub fn report() -> (Status, Status, Status) {
     (screen_status(), mic_status(), camera_status())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn camera_gate_goes_ahead_only_when_granted_and_asks_when_not_determined() {
+        assert_eq!(camera_gate(Status::Granted), Gate::Go);
+        assert_eq!(camera_gate(Status::NotDetermined), Gate::Ask);
+    }
+
+    #[test]
+    fn camera_gate_points_denied_to_system_settings() {
+        let Gate::Blocked(msg) = camera_gate(Status::Denied) else { panic!("denied must block") };
+        assert!(msg.starts_with("Camera access is off for Glide"), "{msg}");
+        assert!(msg.contains("System Settings"), "{msg}");
+    }
+
+    #[test]
+    fn camera_gate_points_restricted_to_system_settings() {
+        let Gate::Blocked(msg) = camera_gate(Status::Restricted) else { panic!("restricted must block") };
+        assert!(msg.contains("restricted") && msg.contains("System Settings"), "{msg}");
+    }
 }

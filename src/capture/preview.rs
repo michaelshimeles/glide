@@ -64,6 +64,8 @@ pub struct Ivars {
     target: Arc<AtomicU64>,
     /// Lanczos scaling (screens only; None = frames as captured).
     scaler: Option<Mutex<Scaler>>,
+    /// Device ID if this output previews an iOS device screen.
+    ios_device_id: Option<String>,
 }
 
 define_class!(
@@ -98,9 +100,9 @@ define_class!(
 );
 
 impl PreviewOutput {
-    fn create(latest: Arc<Mutex<Option<Buffer>>>, level: Arc<AtomicU32>, target: Arc<AtomicU64>, scale: bool, on_frame: Callback) -> Retained<Self> {
+    fn create(latest: Arc<Mutex<Option<Buffer>>>, level: Arc<AtomicU32>, target: Arc<AtomicU64>, scale: bool, ios_device_id: Option<String>, on_frame: Callback) -> Retained<Self> {
         let scaler = scale.then(Scaler::new).flatten().map(Mutex::new);
-        let this = Self::alloc().set_ivars(Ivars { latest, on_frame, level, target, scaler });
+        let this = Self::alloc().set_ivars(Ivars { latest, on_frame, level, target, scaler, ios_device_id });
         unsafe { msg_send![super(this), init] }
     }
 
@@ -111,6 +113,9 @@ impl PreviewOutput {
         let (fw, fh) = (CVPixelBufferGetWidth(&pb), CVPixelBufferGetHeight(&pb));
         if fw < 2 || fh < 2 {
             return;
+        }
+        if let Some(id) = &iv.ios_device_id {
+            camera::record_ios_frame_dimensions(id, fw as u32, fh as u32);
         }
         let t = iv.target.load(Ordering::Relaxed);
         let (w, h) = target_size(fw, fh, ((t >> 32) as u32, t as u32));
@@ -135,6 +140,20 @@ pub fn target_size(fw: usize, fh: usize, area: (u32, u32)) -> (usize, usize) {
     }
     let s = (area.0 as f64 / fw as f64).min(area.1 as f64 / fh as f64).min(1.0);
     (((fw as f64 * s).round() as usize).max(2) & !1, ((fh as f64 * s).round() as usize).max(2) & !1)
+}
+
+/// The long edge of a native-size device preview (`max_px` 0) is capped here.
+pub const NATIVE_PREVIEW_EDGE: u32 = 1280;
+
+/// The pixel size to ask a camera or device output for when its format is
+/// `dims`: the aspect ratio kept, at most `max_px` on the long edge (0 means
+/// native, up to `NATIVE_PREVIEW_EDGE`), never enlarged, each side even and
+/// at least 2.
+pub fn camera_output_size(dims: (i32, i32), max_px: u32) -> (i64, i64) {
+    let cap = if max_px == 0 { NATIVE_PREVIEW_EDGE } else { max_px };
+    let scale = (cap as f64 / dims.0.max(dims.1).max(1) as f64).min(1.0);
+    let even = |v: i32| ((v as f64 * scale) as i64 / 2 * 2).max(2);
+    (even(dims.0), even(dims.1))
 }
 
 /// Lanczos downscaling of BGRA frames on the GPU (as Rec scales recordings
@@ -216,6 +235,10 @@ enum Capture {
 
 /// A running preview stream; stops when dropped.
 pub struct LivePreview {
+    /// First, so the observers go before the session does.
+    _watch: Option<camera::SessionWatch>,
+    /// A runtime error or disconnect of an iPhone/iPad session, until read.
+    runtime_error: Arc<Mutex<Option<String>>>,
     capture: Capture,
     _output: Retained<PreviewOutput>,
     _queue: dispatch2::DispatchRetained<DispatchQueue>,
@@ -233,13 +256,18 @@ impl LivePreview {
     /// `on_frame` (from a capture queue) after each new frame. Screens are
     /// captured at their native pixel size and scaled to `set_target`, or
     /// with `max_px` > 0 captured at most that long edge and not rescaled;
-    /// cameras to at most `max_px` on the long edge. Glide's own windows are
+    /// cameras and iPhones to at most `max_px` on the long edge, where 0
+    /// means native up to `NATIVE_PREVIEW_EDGE`. Glide's own windows are
     /// left out. With `audio`, a screen preview also measures the system
     /// audio it would record (`level`).
     pub fn start(source: &Source, max_px: u32, fps: u32, audio: bool, on_frame: impl Fn() + Send + Sync + 'static) -> Result<LivePreview> {
         match source {
-            Source::Camera { id } => return Self::start_camera(camera::find_camera(id.as_deref())?, max_px, on_frame),
-            Source::Device { id } => return Self::start_camera(camera::find_ios(id)?, max_px, on_frame),
+            Source::Camera { id } => return Self::start_camera(camera::find_camera(id.as_deref())?, max_px, None, on_frame),
+            Source::Device { id } => {
+                // The one place that may ask, on the Slot's background thread.
+                super::tcc::require_camera(std::time::Duration::from_secs(60))?;
+                return Self::start_camera(camera::find_ios(id)?, max_px, Some(id.clone()), on_frame);
+            }
             _ => {}
         }
         let displays = screen::displays()?;
@@ -306,7 +334,7 @@ impl LivePreview {
             let latest = Arc::new(Mutex::new(None));
             let level = Arc::new(AtomicU32::new(0));
             let target = Arc::new(AtomicU64::new(0));
-            let output = PreviewOutput::create(latest.clone(), level.clone(), target.clone(), max_px == 0, Box::new(on_frame));
+            let output = PreviewOutput::create(latest.clone(), level.clone(), target.clone(), max_px == 0, None, Box::new(on_frame));
             let stream = SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &conf, None);
             let queue = DispatchQueue::new("glide.preview", None);
             let proto: &ProtocolObject<dyn SCStreamOutput> = ProtocolObject::from_ref(&*output);
@@ -319,18 +347,22 @@ impl LivePreview {
                     .map_err(|e| anyhow::anyhow!("preview audio: {}", e.localizedDescription()))?;
             }
             wait(|b| stream.startCaptureWithCompletionHandler(Some(b))).context("starting the preview")?;
-            Ok(LivePreview { capture: Capture::Screen(stream), _output: output, _queue: queue, latest, level, target })
+            Ok(LivePreview { _watch: None, runtime_error: Arc::default(), capture: Capture::Screen(stream), _output: output, _queue: queue, latest, level, target })
         }
     }
 
-    /// Preview a camera or iPhone through its own capture session (low preset).
-    fn start_camera(dev: Retained<AVCaptureDevice>, max_px: u32, on_frame: impl Fn() + Send + Sync + 'static) -> Result<LivePreview> {
+    /// Preview a camera (720p preset) or an iPhone/iPad (`ios_id`, the device's
+    /// own format) through its own capture session.
+    fn start_camera(dev: Retained<AVCaptureDevice>, max_px: u32, ios_id: Option<String>, on_frame: impl Fn() + Send + Sync + 'static) -> Result<LivePreview> {
         // SAFETY: AVFoundation configuration on objects we own.
         unsafe {
+            let ios = ios_id.is_some();
             let name = dev.localizedName().to_string();
             let session = AVCaptureSession::new();
             session.beginConfiguration();
-            if session.canSetSessionPreset(AVCaptureSessionPreset1280x720) {
+            if ios {
+                camera::use_native_format(&session);
+            } else if session.canSetSessionPreset(AVCaptureSessionPreset1280x720) {
                 session.setSessionPreset(AVCaptureSessionPreset1280x720);
             }
             let input = AVCaptureDeviceInput::deviceInputWithDevice_error(&dev)
@@ -341,19 +373,30 @@ impl LivePreview {
             session.addInput(&input);
             let out = AVCaptureVideoDataOutput::new();
             // Small frames: the output scales (keeping the aspect ratio).
+            // For iOS devices, keep preview frames native so delivered sizes match recording.
             let dims = dev.activeFormat().formatDescription();
-            let d = objc2_core_media::CMVideoFormatDescriptionGetDimensions(&dims);
-            let scale = (max_px as f64 / d.width.max(d.height).max(1) as f64).min(1.0);
-            let even = |v: i32| ((v as f64 * scale) as i64 / 2 * 2).max(2);
-            out.setVideoSettings(Some(&crate::util::dict(vec![
+            let mut d = objc2_core_media::CMVideoFormatDescriptionGetDimensions(&dims);
+            if (d.width == 0 || d.height == 0)
+                && let Some((dw, dh)) = camera::device_dimensions(&dev)
+            {
+                d = objc2_core_media::CMVideoDimensions { width: dw as i32, height: dh as i32 };
+            }
+            let mut settings = vec![
                 (crate::util::cf_ns(kCVPixelBufferPixelFormatTypeKey), crate::util::num_i(crate::util::PIX_BGRA as i64)),
-                (crate::util::cf_ns(kCVPixelBufferWidthKey), crate::util::num_i(even(d.width))),
-                (crate::util::cf_ns(kCVPixelBufferHeightKey), crate::util::num_i(even(d.height))),
-            ])));
+            ];
+            if !ios && d.width > 0 && d.height > 0 {
+                let (w, h) = camera_output_size((d.width, d.height), max_px);
+                settings.push((crate::util::cf_ns(kCVPixelBufferWidthKey), crate::util::num_i(w)));
+                settings.push((crate::util::cf_ns(kCVPixelBufferHeightKey), crate::util::num_i(h)));
+            }
+            out.setVideoSettings(Some(&crate::util::dict(settings)));
             out.setAlwaysDiscardsLateVideoFrames(true);
             let latest = Arc::new(Mutex::new(None));
             let target = Arc::new(AtomicU64::new(0));
-            let output = PreviewOutput::create(latest.clone(), Arc::new(AtomicU32::new(0)), target.clone(), false, Box::new(on_frame));
+            // Also called when the session reports an error, so the UI looks.
+            let on_frame = Arc::new(on_frame);
+            let wake = on_frame.clone();
+            let output = PreviewOutput::create(latest.clone(), Arc::new(AtomicU32::new(0)), target.clone(), ios, ios_id, Box::new(move || on_frame()));
             let queue = DispatchQueue::new("glide.preview.camera", None);
             out.setSampleBufferDelegate_queue(Some(ProtocolObject::from_ref(&*output)), Some(&queue));
             if !session.canAddOutput(&out) {
@@ -361,12 +404,29 @@ impl LivePreview {
             }
             session.addOutput(&out);
             session.commitConfiguration();
+            let runtime_error = Arc::new(Mutex::new(None));
+            // Only iPhones are watched: a webcam preview that stops just
+            // freezes, as before.
+            let watch = ios.then(|| {
+                let (slot, name) = (runtime_error.clone(), name.clone());
+                camera::SessionWatch::new(&session, &dev, camera::IOS_DISCONNECTED, Arc::new(move |m| {
+                    crate::diag::note(&format!("glide: ios preview {name}: {m}"));
+                    slot.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert(m);
+                    wake();
+                }))
+            });
             session.startRunning();
             if !session.isRunning() {
                 bail!("{name} failed to start");
             }
-            Ok(LivePreview { capture: Capture::Camera(session), _output: output, _queue: queue, latest, level: Arc::new(AtomicU32::new(0)), target })
+            Ok(LivePreview { _watch: watch, runtime_error, capture: Capture::Camera(session), _output: output, _queue: queue, latest, level: Arc::new(AtomicU32::new(0)), target })
         }
+    }
+
+    /// The runtime error or disconnect an iPhone/iPad session reported since
+    /// the last call.
+    pub fn take_runtime_error(&self) -> Option<String> {
+        self.runtime_error.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
 
     /// Peak audio level (0..1) since the last call; 0 without audio.
@@ -436,5 +496,68 @@ fn wait(f: impl FnOnce(&block2::DynBlock<dyn Fn(*mut NSError)>)) -> Result<()> {
         Ok(None) => Ok(()),
         Ok(Some(e)) => bail!("{e}"),
         Err(_) => bail!("timed out"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The size math as `start_camera` had it before `camera_output_size`
+    /// (it turned `max_px` 0 into 2x2).
+    fn old(dims: (i32, i32), max_px: u32) -> (i64, i64) {
+        let scale = (max_px as f64 / dims.0.max(dims.1).max(1) as f64).min(1.0);
+        let even = |v: i32| ((v as f64 * scale) as i64 / 2 * 2).max(2);
+        (even(dims.0), even(dims.1))
+    }
+
+    fn long(s: (i64, i64)) -> i64 {
+        s.0.max(s.1)
+    }
+
+    #[test]
+    fn camera_output_size_native_is_capped_at_1280_not_2x2() {
+        let s = camera_output_size((1170, 2532), 0);
+        assert!((1278..=1280).contains(&long(s)), "{s:?}");
+        assert!(s.0 % 2 == 0 && s.1 % 2 == 0);
+        // Aspect ratio within a pixel of 1170:2532.
+        assert!((s.1 as f64 * 1170.0 / 2532.0 - s.0 as f64).abs() <= 2.0, "{s:?}");
+        let land = camera_output_size((2532, 1170), 0);
+        assert_eq!((land.0, land.1), (s.1, s.0));
+    }
+
+    #[test]
+    fn camera_output_size_honours_max_px() {
+        assert!((638..=640).contains(&long(camera_output_size((1170, 2532), 640))));
+        assert!((718..=720).contains(&long(camera_output_size((1170, 2532), 720))));
+        let land = camera_output_size((2532, 1170), 720);
+        assert!((718..=720).contains(&land.0) && land.0 > land.1);
+    }
+
+    #[test]
+    fn camera_output_size_keeps_webcam_sizes_unchanged() {
+        for dims in [(1280, 720), (1920, 1080), (640, 480), (1280, 960), (3840, 2160)] {
+            assert_eq!(camera_output_size(dims, 720), old(dims, 720), "{dims:?}");
+        }
+    }
+
+    #[test]
+    fn camera_output_size_makes_odd_sizes_even() {
+        for max in [0, 640, 720] {
+            let s = camera_output_size((1001, 1999), max);
+            assert!(s.0 % 2 == 0 && s.1 % 2 == 0 && s.0 >= 2 && s.1 >= 2, "{max}: {s:?}");
+        }
+    }
+
+    #[test]
+    fn camera_output_size_never_enlarges() {
+        assert_eq!(camera_output_size((640, 480), 0), (640, 480));
+        assert_eq!(camera_output_size((640, 480), 720), (640, 480));
+    }
+
+    #[test]
+    fn camera_output_size_survives_zero_dimensions() {
+        assert_eq!(camera_output_size((0, 0), 0), (2, 2));
+        assert_eq!(camera_output_size((0, 0), 720), (2, 2));
     }
 }

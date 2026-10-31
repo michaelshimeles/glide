@@ -106,3 +106,31 @@ fn export_carries_the_recorded_sound() {
     assert!((level.tone_db + 23.0).abs() < 1.5, "{level:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+#[test]
+fn package_music_is_mixed_and_a_missing_file_is_reported() {
+    use glide::engine::timemap::TimeMap;
+    use glide::export::audio::{mix_unmastered, music_missing};
+    let (dir, path) = package("music", None);
+    let pkg = glide::project::Package::new(&path);
+    let (mut project, rec) = pkg.load().unwrap();
+    let tone: Vec<[f32; 2]> = (0..96_000).map(|i| { let v = 0.2 * (i as f32 * 0.05).sin(); [v, v] }).collect();
+    std::fs::create_dir_all(path.join("assets")).unwrap();
+    let file = path.join("assets/music-1.wav");
+    glide::app::player::write_wav(&file, &tone).unwrap();
+    project.style.audio.click_sounds = false;
+    project.style.audio.music = Some("assets/music-1.wav".into());
+    let map = TimeMap::new(&project.timeline.slices, rec.meta.duration_ms);
+    let peak = |m: &[[f32; 2]]| m.iter().fold(0.0f32, |p, s| p.max(s[0].abs()));
+    let relative = mix_unmastered(&project, &rec, Some(&path), &map).expect("the packaged music is mixed");
+    assert!(peak(&relative) > 0.001, "peak {}", peak(&relative));
+    assert!(!music_missing(Some(&path), &project.style.audio));
+    // An older project stored the absolute path; it mixes the same.
+    project.style.audio.music = Some(file.to_string_lossy().into_owned());
+    let absolute = mix_unmastered(&project, &rec, Some(&path), &map).expect("the absolute path still works");
+    assert_eq!(relative, absolute);
+    project.style.audio.music = Some("assets/music-1.wav".into());
+    std::fs::remove_file(&file).unwrap();
+    assert!(music_missing(Some(&path), &project.style.audio));
+    assert!(mix_unmastered(&project, &rec, Some(&path), &map).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
