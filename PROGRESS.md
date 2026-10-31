@@ -38,9 +38,11 @@ Milestones and parity track the checklist in `analysis/SCREEN_STUDIO.md`.
 | R13 | Resize the recorded window | ☑ | Window source shows the window's size with a Resize menu: the same preset groups, saved sizes, custom size; sizes that don't fit its display are disabled. Accessibility API (needs Accessibility permission). Verified by resizing DaisyCap's own window (`scripts/selftest.sh --screen`). |
 | Z1–Z7 | Auto zoom, zoom model, targeting, manual target, edge snapping, spring zoom, motion blur | ☑ | Engine unit tests; manual target picked by clicking the preview. |
 | C1–C9 | Cursor re-rendering, smoothing, tilt, press, idle hide, hidden slices, click circle/ripple, click sounds, loop/freeze | ☑ | System cursor images, plus generated vector and touch skins. |
+| C10 | Click and keyboard sounds | ☑ | Six synthesized click flavours and four keyboard sounds, chosen in a dropdown with an audition button; per-key pitch and gain variation, heavier space/return, modifier keys skipped, optional typing-only filter, a zoom whoosh, and sound-mood buttons (Minimal, Office, Mech keeb). Mixed into the preview and the export; unit tests cover the bank and placement under cuts and 2× speed. |
 | S1 | Backgrounds | ☑ | Generated wallpapers (soft colour fields crossed by crisp "glass" ribbons, so blur visibly softens them), gradients, colour, imported PNG/JPEG (checked on import), current desktop picture, blur. Every recording, full-screen ones included, starts with padding so the background is visible; at 0 % padding a background, blur or shadow edit brings the padding back (8 %) and says so. `daisycap check-background` and `tests/background.rs` render each option and check the pixels change, on the editor preview and on a real 5K recording; an export test checks the exported frame matches the preview. |
 | S2–S7 | Padding, roundness, shadow, inset, aspect ratio, crop | ☑ | Roundness and shadow sizes are px in a 1080p-tall frame (like blur), whatever the recording's resolution, so they look the same on Retina and 1080p recordings. |
 | S8 | Device frames | ☑ | Generated laptop, phone, tablet frames (no artwork reused). |
+| S9 | Daisy watermark | ☑ | The icon's daisy mark in the bottom-left corner of every frame, drawn by the renderer (preview, thumbnails and export), on by default. A Pro-badged toggle turns it off; a render test checks it only changes the corner. |
 | K1–K5 | Camera bubble, shape, shrink while zoomed, layouts, auto-hide | ◐ | Bubble, circle/aspect shapes and camera-only layout verified with a generated camera clip on a real recording; live camera capture unverified (permission). |
 | T1–T7 | Slices, trim, split/delete, speed, zoom track, layout track, undo/redo/scrub/loop | ☑ | |
 | T8 | Typing speed-up | ☑ | Detects typing runs in the key log; one click to 2–4×. |
@@ -62,16 +64,20 @@ Milestones and parity track the checklist in `analysis/SCREEN_STUDIO.md`.
 | P2 | Style presets | ☑ | Save/apply/delete, default preset for new recordings. |
 | P3 | Editor sidebar + selection inspector | ☑ | |
 | P4 | Menu bar | ☑ | Record display/window/area, pause, status with elapsed time. |
+| P6 | Pro badge and subscription link | ☑ | A "PRO" chip next to Pro settings (the watermark toggle); hovering or clicking opens a toolbox that links to the subscription page (`src/app/pro.rs` holds the URL). |
 
 ## Verification on this MacBook (M4 Pro, macOS 27)
 
 `scripts/selftest.sh --screen` (2026-10-12): 13/13 pass.
 
-- `cargo test` (92): engine, project, presets, renderer helpers, masks,
+- `cargo test` (104): engine, project, presets, renderer helpers, masks,
   device frames, typing detection, caption editing, transcription chunking,
   Whisper transcription of synthesized speech,
   hotkeys, timeline clamping and cuts, voice isolation, masked-content
-  change detection, window picking, GIF quantisation, icon, plus a
+  change detection, window picking, GIF quantisation, icon, the sound bank
+  (every click and key flavour finite, unique and deterministic, keys
+  distinct per key code), click/key/whoosh placement under cuts and speed,
+  the daisy watermark drawing only the corner, plus a
   headless UI smoke test driving every editor panel and background tests
   that edit each Background setting through the editor, read the preview's
   pixels back and compare them (and the exported frame) before and after,

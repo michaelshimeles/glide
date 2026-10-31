@@ -10,7 +10,9 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			adapter: adapter(),
+			// The local Node version can be newer than Vercel's runtimes
+			// (adapter-vercel refuses Node 26); pin a supported one.
+			adapter: adapter({ runtime: 'nodejs24.x' }),
 			// A one-page site has nothing to refresh, so don't poll for new deployments.
 			version: { pollInterval: 0 }
 		})

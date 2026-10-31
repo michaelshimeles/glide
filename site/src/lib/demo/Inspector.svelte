@@ -78,6 +78,13 @@
 			<Slider label="Distance" value={0.25} text="25 px" />
 			<Slider label="Blur" value={0.2} text="20 px" />
 		</section>
+		<section>
+			<h5>Watermark</h5>
+			<div class="row">
+				<span>Daisy mark <span class="pro">PRO</span></span>
+				<span class="switch on"><span></span></span>
+			</div>
+		</section>
 	{:else}
 		<section>
 			<h5>Cursor</h5>
@@ -102,7 +109,12 @@
 		<section>
 			<h5>Clicks</h5>
 			<Segmented items={['None', 'Circle', 'Ripple']} selected={1} />
-			{@render toggle('Click sounds', false)}
+			{@render toggle('Click sounds', true)}
+			<div class="row">
+				<span>Sound</span>
+				<span class="combo">Classic <svg viewBox="0 0 8 5"><path d="M0 0h8L4 5z" /></svg></span>
+			</div>
+			<Slider label="Click volume" value={0.25} text="0.25" />
 		</section>
 	{/if}
 </div>
@@ -156,6 +168,19 @@
 		align-items: center;
 		justify-content: space-between;
 		min-height: 22px;
+	}
+
+	.pro {
+		display: inline-block;
+		margin-left: 5px;
+		padding: 0 5px;
+		border: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+		border-radius: 7px;
+		color: var(--accent);
+		font-size: 9px;
+		font-weight: 600;
+		line-height: 12px;
+		vertical-align: 1px;
 	}
 
 	.label {
