@@ -7,8 +7,8 @@ use std::path::Path;
 use crate::capture::mixer::RATE;
 use crate::engine::events::Events;
 use crate::engine::timemap::TimeMap;
-use crate::project::model::Project;
-use crate::project::recording::Recording;
+use crate::project::model::{ClickSound, KeySound, Project};
+use crate::project::recording::{Recording, mods};
 
 pub type Stereo = [f32; 2];
 
@@ -198,22 +198,213 @@ pub fn clean_voice(buf: &mut Vec<Stereo>) {
     }
 }
 
-/// A short synthetic mouse click (two damped noise ticks).
-fn click_sound() -> Vec<Stereo> {
-    let n = (RATE * 0.045) as usize;
-    let mut seed = 0x1234_5678u32;
-    (0..n)
-        .map(|i| {
-            seed ^= seed << 13;
-            seed ^= seed >> 17;
-            seed ^= seed << 5;
-            let noise = (seed as f32 / u32::MAX as f32) * 2.0 - 1.0;
+/// A short synthetic percussive sound: a band-passed noise burst and a
+/// gliding tone, decaying, with an optional second tick (a key release, a
+/// lever) and an optional ring. Everything is generated, so exports carry no
+/// audio assets and repeated exports are identical.
+#[derive(Clone, Copy)]
+struct Tick {
+    len_ms: f32,
+    /// Noise burst level and the band-pass corners, Hz.
+    noise: f32,
+    band_lo: f32,
+    band_hi: f32,
+    /// Tonal body: level, frequency and its end (a glide over `glide_ms`).
+    tone: f32,
+    tone_hz: f32,
+    tone_hz2: f32,
+    glide_ms: f32,
+    /// Decay rate (1/s) of the burst and body.
+    decay: f32,
+    /// Second tick: level, delay (ms) and decay.
+    second: f32,
+    second_ms: f32,
+    second_decay: f32,
+    /// A metallic ring (level, Hz, decay), for typewriter keys.
+    ring: f32,
+    ring_hz: f32,
+    ring_decay: f32,
+}
+
+impl Tick {
+    fn render(&self, pitch: f32, seed: u32) -> Vec<Stereo> {
+        let n = (RATE * self.len_ms as f64 / 1000.0) as usize;
+        let mut out = Vec::with_capacity(n);
+        let mut rng = seed | 1;
+        let mut lp = [0.0f32; 2];
+        let a = |f: f32| 1.0 - (-std::f32::consts::TAU * f * pitch / RATE as f32).exp();
+        let (a1, a2) = (a(self.band_hi), a(self.band_lo));
+        let (mut phase, mut ring_phase) = (0.0f32, 0.0f32);
+        let second_at = self.second_ms / 1000.0;
+        for i in 0..n {
             let t = i as f32 / RATE as f32;
-            let tick = (-t * 900.0).exp() + 0.6 * (-(t - 0.025).max(0.0) * 1100.0).exp() * if t > 0.025 { 1.0 } else { 0.0 };
-            let v = noise * tick * 0.5 + (t * 2.0 * std::f32::consts::PI * 2400.0).sin() * tick * 0.25;
-            [v, v]
-        })
-        .collect()
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            let white = (rng as f32 / u32::MAX as f32) * 2.0 - 1.0;
+            lp[0] += (white - lp[0]) * a1;
+            lp[1] += (white - lp[1]) * a2;
+            let env = (-t * self.decay).exp() + if t >= second_at { self.second * (-(t - second_at) * self.second_decay).exp() } else { 0.0 };
+            let glide = (t * 1000.0 / self.glide_ms.max(0.01)).min(1.0);
+            phase += std::f32::consts::TAU * (self.tone_hz + (self.tone_hz2 - self.tone_hz) * glide) * pitch / RATE as f32;
+            ring_phase += std::f32::consts::TAU * self.ring_hz * pitch / RATE as f32;
+            let attack = (t * RATE as f32 / 2.0).min(1.0);
+            let v = ((lp[0] - lp[1]) * self.noise + phase.sin() * self.tone) * env * attack + ring_phase.sin() * self.ring * (-t * self.ring_decay).exp() * attack;
+            out.push([v, v]);
+        }
+        out
+    }
+}
+
+/// A small deterministic hash, for per-key pitch and gain.
+fn hash32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^ (x >> 16)
+}
+
+/// A synthesized click, one flavour each.
+pub fn click_sound(kind: ClickSound) -> Vec<Stereo> {
+    let t = match kind {
+        ClickSound::Classic => Tick {
+            len_ms: 45.0, noise: 0.5, band_lo: 40.0, band_hi: 16_000.0,
+            tone: 0.25, tone_hz: 2400.0, tone_hz2: 2400.0, glide_ms: 1.0,
+            decay: 900.0, second: 0.6, second_ms: 25.0, second_decay: 1100.0,
+            ring: 0.0, ring_hz: 5200.0, ring_decay: 60.0,
+        },
+        ClickSound::Soft => Tick {
+            len_ms: 42.0, noise: 0.3, band_lo: 150.0, band_hi: 2600.0,
+            tone: 0.3, tone_hz: 820.0, tone_hz2: 600.0, glide_ms: 20.0,
+            decay: 1500.0, second: 0.25, second_ms: 22.0, second_decay: 1600.0,
+            ring: 0.0, ring_hz: 2600.0, ring_decay: 60.0,
+        },
+        ClickSound::Sharp => Tick {
+            len_ms: 30.0, noise: 0.65, band_lo: 900.0, band_hi: 12_000.0,
+            tone: 0.3, tone_hz: 3600.0, tone_hz2: 3100.0, glide_ms: 10.0,
+            decay: 2100.0, second: 0.3, second_ms: 12.0, second_decay: 2400.0,
+            ring: 0.0, ring_hz: 6000.0, ring_decay: 60.0,
+        },
+        ClickSound::Thock => Tick {
+            len_ms: 65.0, noise: 0.35, band_lo: 80.0, band_hi: 1600.0,
+            tone: 0.55, tone_hz: 175.0, tone_hz2: 130.0, glide_ms: 30.0,
+            decay: 650.0, second: 0.35, second_ms: 28.0, second_decay: 700.0,
+            ring: 0.0, ring_hz: 900.0, ring_decay: 60.0,
+        },
+        ClickSound::Typewriter => Tick {
+            len_ms: 62.0, noise: 0.55, band_lo: 300.0, band_hi: 7000.0,
+            tone: 0.3, tone_hz: 2300.0, tone_hz2: 1400.0, glide_ms: 25.0,
+            decay: 1300.0, second: 0.4, second_ms: 24.0, second_decay: 2100.0,
+            ring: 0.09, ring_hz: 5200.0, ring_decay: 55.0,
+        },
+        ClickSound::Pop => Tick {
+            len_ms: 45.0, noise: 0.12, band_lo: 200.0, band_hi: 4000.0,
+            tone: 0.7, tone_hz: 900.0, tone_hz2: 420.0, glide_ms: 22.0,
+            decay: 1300.0, second: 0.0, second_ms: 20.0, second_decay: 1000.0,
+            ring: 0.0, ring_hz: 3000.0, ring_decay: 60.0,
+        },
+    };
+    t.render(1.0, hash32(kind as u32 + 1))
+}
+
+/// Modifier key codes: they get no sound of their own, so ⌘S is one clack.
+pub fn is_modifier(code: u16) -> bool {
+    matches!(code, 54..=63)
+}
+
+/// A synthesized keyboard key: `code` picks a small pitch and gain variation
+/// (a real board never sounds identical twice), and space and return land
+/// heavier than letters.
+pub fn key_sound(kind: KeySound, code: u16) -> Vec<Stereo> {
+    let t = match kind {
+        KeySound::Mech => Tick {
+            len_ms: 55.0, noise: 0.4, band_lo: 100.0, band_hi: 2200.0,
+            tone: 0.45, tone_hz: 215.0, tone_hz2: 160.0, glide_ms: 25.0,
+            decay: 700.0, second: 0.3, second_ms: 22.0, second_decay: 900.0,
+            ring: 0.0, ring_hz: 800.0, ring_decay: 60.0,
+        },
+        KeySound::Typewriter => Tick {
+            len_ms: 58.0, noise: 0.5, band_lo: 400.0, band_hi: 7500.0,
+            tone: 0.25, tone_hz: 1900.0, tone_hz2: 1150.0, glide_ms: 18.0,
+            decay: 1200.0, second: 0.35, second_ms: 20.0, second_decay: 2000.0,
+            ring: 0.08, ring_hz: 5600.0, ring_decay: 45.0,
+        },
+        KeySound::Soft => Tick {
+            len_ms: 38.0, noise: 0.25, band_lo: 800.0, band_hi: 4500.0,
+            tone: 0.2, tone_hz: 1500.0, tone_hz2: 1200.0, glide_ms: 10.0,
+            decay: 1700.0, second: 0.0, second_ms: 18.0, second_decay: 1800.0,
+            ring: 0.0, ring_hz: 4000.0, ring_decay: 60.0,
+        },
+        KeySound::Pop => Tick {
+            len_ms: 42.0, noise: 0.1, band_lo: 200.0, band_hi: 3500.0,
+            tone: 0.65, tone_hz: 850.0, tone_hz2: 430.0, glide_ms: 20.0,
+            decay: 1300.0, second: 0.0, second_ms: 18.0, second_decay: 1000.0,
+            ring: 0.0, ring_hz: 3000.0, ring_decay: 60.0,
+        },
+    };
+    let h = hash32(code as u32);
+    let semis = (h % 5) as f32 - 2.0;
+    let mut pitch = 2f32.powf(semis / 12.0);
+    let mut gain = 1.0 + ((h >> 8) % 3) as f32 * 0.06 - 0.06;
+    match code {
+        // Space lands heavier and deeper; return a little heavier too.
+        49 => {
+            pitch *= 0.78;
+            gain *= 1.35;
+        }
+        36 | 76 => {
+            pitch *= 0.85;
+            gain *= 1.15;
+        }
+        // Delete keys are crisper and a touch louder.
+        51 | 117 => {
+            pitch *= 1.06;
+            gain *= 1.08;
+        }
+        48 => pitch *= 0.9,
+        _ => {}
+    }
+    let mut s = t.render(pitch, h | 1);
+    for v in &mut s {
+        v[0] *= gain;
+        v[1] *= gain;
+    }
+    s
+}
+
+/// A soft whoosh as a zoom moves the camera in: a noise band sweeping up,
+/// quick to arrive and fading out.
+pub fn zoom_whoosh() -> Vec<Stereo> {
+    let n = (RATE * 0.45) as usize;
+    let mut out = Vec::with_capacity(n);
+    let mut rng = 0x51ed_2701u32;
+    let mut lp = [0.0f32; 2];
+    for i in 0..n {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        let white = (rng as f32 / u32::MAX as f32) * 2.0 - 1.0;
+        let u = i as f32 / n as f32;
+        let f = 380.0 * (2400.0f32 / 380.0).powf(u);
+        let a = 1.0 - (-std::f32::consts::TAU * f / RATE as f32).exp();
+        lp[0] += (white - lp[0]) * a;
+        lp[1] += (white - lp[1]) * a * 0.25;
+        let env = (u * 18.0).min(1.0) * (1.0 - u).powf(1.4);
+        let v = (lp[0] - lp[1]) * env * 1.2;
+        out.push([v, v]);
+    }
+    out
+}
+
+/// Add a short sound to the soundtrack at a sample position.
+fn place(out: &mut [Stereo], at: usize, s: &[Stereo], g: f32) {
+    for (k, v) in s.iter().enumerate() {
+        if let Some(o) = out.get_mut(at + k) {
+            o[0] += v[0] * g;
+            o[1] += v[1] * g;
+        }
+    }
 }
 
 pub fn soft_clip(x: f32) -> f32 {
@@ -326,17 +517,32 @@ pub fn mix_unmastered(project: &Project, rec: &Recording, dir: Option<&Path>, ma
         any = true;
     }
     if style.click_sounds {
-        let click = click_sound();
         let g = style.click_volume as f32;
+        let sound = click_sound(style.click_sound);
         for d in Events::new(rec.mouse.clone()).downs {
             if let Some(pb) = map.to_playback(d.t) {
-                let at = (pb / 1000.0 * RATE) as usize;
-                for (k, s) in click.iter().enumerate() {
-                    if let Some(o) = out.get_mut(at + k) {
-                        o[0] += s[0] * g;
-                        o[1] += s[1] * g;
-                    }
-                }
+                place(&mut out, (pb / 1000.0 * RATE) as usize, &sound, g);
+            }
+        }
+        any = true;
+    }
+    if style.key_sounds {
+        let g = style.key_volume as f32;
+        for k in rec.keys.iter().filter(|k| {
+            k.down && !is_modifier(k.code) && (!style.key_typing_only || k.mods & (mods::CMD | mods::CTRL) == 0)
+        }) {
+            if let Some(pb) = map.to_playback(k.t) {
+                place(&mut out, (pb / 1000.0 * RATE) as usize, &key_sound(style.key_sound, k.code), g);
+            }
+        }
+        any = true;
+    }
+    if style.zoom_whoosh {
+        let g = style.whoosh_volume as f32;
+        let sound = zoom_whoosh();
+        for z in project.timeline.zooms.iter().filter(|z| !z.disabled) {
+            if let Some(pb) = map.to_playback(z.start) {
+                place(&mut out, (pb / 1000.0 * RATE) as usize, &sound, g);
             }
         }
         any = true;
@@ -404,5 +610,102 @@ mod tests {
         enhance_voice(&mut buf);
         let peak = buf.iter().fold(0.0f32, |m, s| m.max(s[0].abs()));
         assert!(peak > 0.02 && peak <= 0.2, "{peak}");
+    }
+
+    /// Peak amplitude in a 1 ms window at `ms`.
+    fn level_at(out: &[Stereo], ms: f64) -> f32 {
+        let at = (ms / 1000.0 * RATE) as usize;
+        out.iter().skip(at).take((RATE * 0.001) as usize).fold(0.0f32, |m, s| m.max(s[0].abs()).max(s[1].abs()))
+    }
+
+    fn click(t: f64) -> crate::project::recording::MouseEvent {
+        crate::project::recording::MouseEvent { t, x: 0.0, y: 0.0, kind: crate::project::recording::MouseKind::Down, button: 0, cursor: 0 }
+    }
+
+    fn key(t: f64, code: u16, m: u8) -> crate::project::recording::KeyEvent {
+        crate::project::recording::KeyEvent { t, code, key: "X".into(), mods: m, down: true }
+    }
+
+    #[test]
+    fn every_sound_is_finite_unique_and_deterministic() {
+        let mut all: Vec<(&str, Vec<Stereo>)> = vec![];
+        for k in ClickSound::ALL {
+            all.push((k.label(), click_sound(k)));
+        }
+        for k in KeySound::ALL {
+            all.push((k.label(), key_sound(k, 8)));
+        }
+        all.push(("whoosh", zoom_whoosh()));
+        for (name, s) in &all {
+            assert!(!s.is_empty(), "{name} is empty");
+            assert!(s.iter().all(|v| v[0].is_finite() && v[1].is_finite()), "{name} has non-finite samples");
+            let peak = s.iter().fold(0.0f32, |m, v| m.max(v[0].abs()));
+            assert!(peak > 0.05 && peak < 1.5, "{name} peak {peak}");
+        }
+        // Flavour by flavour, no two sounds are the same buffer.
+        for i in 0..all.len() {
+            for j in i + 1..all.len() {
+                assert_ne!(all[i].1, all[j].1, "{} and {} are identical", all[i].0, all[j].0);
+            }
+        }
+        // Deterministic: the same flavour renders the same samples.
+        assert_eq!(click_sound(ClickSound::Thock), click_sound(ClickSound::Thock));
+        assert_eq!(key_sound(KeySound::Mech, 12), key_sound(KeySound::Mech, 12));
+    }
+
+    #[test]
+    fn keys_vary_and_accent_the_big_bar() {
+        assert_ne!(key_sound(KeySound::Mech, 8), key_sound(KeySound::Mech, 40), "keys vary");
+        let rms = |s: &[Stereo]| (s.iter().map(|v| v[0] * v[0]).sum::<f32>() / s.len() as f32).sqrt();
+        assert!(rms(&key_sound(KeySound::Mech, 49)) > rms(&key_sound(KeySound::Mech, 8)) * 1.15, "space is heavier");
+        assert!(is_modifier(55) && is_modifier(59) && is_modifier(63) && !is_modifier(8));
+    }
+
+    #[test]
+    fn mix_places_sounds_on_the_edit() {
+        use crate::project::model::{Slice, Zoom};
+        use crate::project::recording::Recording;
+
+        let mut rec = Recording::default();
+        rec.mouse = vec![click(500.0)];
+        rec.keys = vec![
+            key(700.0, 8, 0),
+            crate::project::recording::KeyEvent { t: 730.0, code: 8, key: "X".into(), mods: 0, down: false },
+            key(800.0, 55, crate::project::recording::mods::CMD), // ⌘ alone: no sound
+            key(1000.0, 3, crate::project::recording::mods::CMD), // ⌘F: a shortcut
+        ];
+        let mut p = Project::default();
+        p.timeline.slices = vec![Slice { id: 1, start: 0.0, end: 3000.0, ..Default::default() }];
+        let map = TimeMap::new(&p.timeline.slices, 3000.0);
+
+        assert!(mix_unmastered(&p, &rec, None, &map).is_none(), "silent with every sound off");
+
+        p.style.audio.click_sounds = true;
+        p.style.audio.click_volume = 0.5;
+        let out = mix_unmastered(&p, &rec, None, &map).expect("clicks are mixed");
+        assert!(level_at(&out, 500.0) > 0.02, "the click is at its source time");
+        assert!(level_at(&out, 1500.0) < 1e-4, "and nowhere else");
+
+        p.style.audio.key_sounds = true;
+        p.style.audio.key_volume = 0.5;
+        let out = mix_unmastered(&p, &rec, None, &map).expect("keys are mixed");
+        assert!(level_at(&out, 700.0) > 0.02, "a key press sounds");
+        assert!(level_at(&out, 800.0) < 1e-4, "a modifier alone is silent");
+        assert!(level_at(&out, 1000.0) > 0.02, "shortcuts sound by default");
+        p.style.audio.key_typing_only = true;
+        let out = mix_unmastered(&p, &rec, None, &map).expect("keys are mixed");
+        assert!(level_at(&out, 1000.0) < 1e-4, "typing only skips the shortcut");
+        assert!(level_at(&out, 700.0) > 0.02, "typing still sounds");
+
+        p.style.audio.zoom_whoosh = true;
+        p.timeline.zooms = vec![Zoom { id: 1, start: 2000.0, end: 2600.0, ..Default::default() }];
+        let out = mix_unmastered(&p, &rec, None, &map).expect("the whoosh is mixed");
+        assert!(level_at(&out, 2015.0) > 0.02, "the whoosh starts with the zoom");
+
+        // A sped-up slice moves every sound with the edit.
+        p.timeline.slices[0].speed = 2.0;
+        let map = TimeMap::new(&p.timeline.slices, 3000.0);
+        let out = mix_unmastered(&p, &rec, None, &map).expect("clicks are mixed");
+        assert!(level_at(&out, 250.0) > 0.02 && level_at(&out, 500.0) < 1e-4, "2x moves the click to half its time");
     }
 }

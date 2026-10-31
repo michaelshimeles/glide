@@ -79,6 +79,12 @@ struct Shared {
     mix_gen: AtomicU64,
     /// Newest requested mix; older background mixes are dropped.
     requested: AtomicU64,
+    /// A one-off sound (an audition) played over the soundtrack.
+    oneshot: Mutex<Option<Arc<Vec<Stereo>>>>,
+    /// Bumped when `oneshot` changes; playback restarts from the top.
+    oneshot_gen: AtomicU64,
+    /// Playback position in the one-off sound (f64 bits).
+    oneshot_pos: AtomicU64,
     /// Playback position in soundtrack frames (f64 bits).
     pos: AtomicU64,
     playing: AtomicBool,
@@ -131,6 +137,8 @@ pub struct AudioPreview {
     mixing: Arc<AtomicU64>,
     /// Last output error, for the status line.
     pub error: Option<String>,
+    /// When the playing audition ends, so the device can sleep again.
+    oneshot_until: Option<Instant>,
     /// When the output was last restarted (at most once a second).
     restarted: Option<Instant>,
     /// Held while playing, so App Nap doesn't throttle the picture when
@@ -147,6 +155,9 @@ impl AudioPreview {
                 mix: Mutex::new(None),
                 mix_gen: AtomicU64::new(0),
                 requested: AtomicU64::new(0),
+                oneshot: Mutex::new(None),
+                oneshot_gen: AtomicU64::new(0),
+                oneshot_pos: AtomicU64::new(0f64.to_bits()),
                 pos: AtomicU64::new(0f64.to_bits()),
                 playing: AtomicBool::new(false),
                 volume: AtomicU32::new(1f32.to_bits()),
@@ -163,6 +174,7 @@ impl AudioPreview {
             mixed: None,
             mixing: Arc::new(AtomicU64::new(0)),
             error: None,
+            oneshot_until: None,
             restarted: None,
             activity: None,
         }
@@ -265,6 +277,41 @@ impl AudioPreview {
         }
     }
 
+    /// Play a one-off sound over the current state, paused or not (an
+    /// audition). The master volume applies, like to the soundtrack.
+    pub fn play_oneshot(&mut self, samples: Vec<Stereo>) {
+        if samples.is_empty() {
+            return;
+        }
+        if let Err(e) = self.ensure_output() {
+            self.error = Some(format!("No audio output: {e:#}"));
+            eprintln!("daisycap: audio output: {e:#}");
+            self.output = None;
+            return;
+        }
+        if let Some(o) = &self.output {
+            let _ = o.stream.0.play();
+        }
+        let secs = samples.len() as f64 / RATE;
+        let s = &self.shared;
+        *s.oneshot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(samples));
+        s.oneshot_gen.fetch_add(1, Ordering::Release);
+        s.oneshot_pos.store(0f64.to_bits(), Ordering::Relaxed);
+        self.oneshot_until = Some(Instant::now() + Duration::from_secs_f64(secs + 0.15));
+    }
+
+    /// If nothing is playing and the last audition has finished, put the
+    /// output device back to sleep.
+    fn release_when_idle(&mut self) {
+        if self.is_playing() || !self.oneshot_until.is_some_and(|t| Instant::now() >= t) {
+            return;
+        }
+        self.oneshot_until = None;
+        if let Some(o) = &self.output {
+            let _ = o.stream.0.pause();
+        }
+    }
+
     fn seek(&self, at_ms: f64) {
         let frames = (at_ms.max(0.0) / 1000.0 * RATE).max(0.0);
         self.shared.pos.store(frames.to_bits(), Ordering::Relaxed);
@@ -336,9 +383,10 @@ impl AudioPreview {
         Ok(())
     }
 
-    /// Start a settled re-mix.
+    /// Start a settled re-mix, and release the device after an audition.
     pub fn tick(&mut self) {
         self.start_due();
+        self.release_when_idle();
     }
 }
 
@@ -361,7 +409,9 @@ fn build<T: SizedSample + FromSample<f32>>(device: &cpal::Device, config: cpal::
     // Soundtrack frames per device frame.
     let step = RATE / config.sample_rate as f64;
     let mut mix: Option<Arc<Vec<Stereo>>> = None;
+    let mut one: Option<Arc<Vec<Stereo>>> = None;
     let mut seen = u64::MAX;
+    let mut seen_one = u64::MAX;
     let (mut frames, mut energy, mut source, mut peak) = (0u64, 0f64, 0f64, 0f32);
     let cb = shared.clone();
     let data = move |out: &mut [T], _: &cpal::OutputCallbackInfo| {
@@ -374,6 +424,14 @@ fn build<T: SizedSample + FromSample<f32>>(device: &cpal::Device, config: cpal::
             mix = m.clone();
             seen = g;
         }
+        let og = s.oneshot_gen.load(Ordering::Acquire);
+        if og != seen_one
+            && let Ok(o) = s.oneshot.try_lock()
+        {
+            one = o.clone();
+            seen_one = og;
+            s.oneshot_pos.store(0f64.to_bits(), Ordering::Relaxed);
+        }
         if s.meter_reset.swap(false, Ordering::Acquire) {
             (frames, energy, source, peak) = (0, 0.0, 0.0, 0.0);
         }
@@ -381,11 +439,21 @@ fn build<T: SizedSample + FromSample<f32>>(device: &cpal::Device, config: cpal::
         let volume = f32::from_bits(s.volume.load(Ordering::Relaxed));
         let start = s.pos.load(Ordering::Relaxed);
         let mut pos = f64::from_bits(start);
+        let start_one = s.oneshot_pos.load(Ordering::Relaxed);
+        let mut one_pos = f64::from_bits(start_one);
         for frame in out.chunks_mut(channels.max(1)) {
-            let v = match (&mix, playing) {
+            let mut v = match (&mix, playing) {
                 (Some(m), true) => sample(m, pos),
                 _ => [0.0, 0.0],
             };
+            if let Some(o) = &one
+                && (one_pos as usize) < o.len()
+            {
+                let s = sample(o, one_pos);
+                v[0] += s[0];
+                v[1] += s[1];
+                one_pos += step;
+            }
             let [l, r] = [soft_clip(v[0] * volume), soft_clip(v[1] * volume)];
             if playing {
                 pos += step;
@@ -414,6 +482,7 @@ fn build<T: SizedSample + FromSample<f32>>(device: &cpal::Device, config: cpal::
             s.meter_source.store(source.to_bits(), Ordering::Relaxed);
             s.meter_peak.store(peak.to_bits(), Ordering::Relaxed);
         }
+        let _ = s.oneshot_pos.compare_exchange(start_one, one_pos.to_bits(), Ordering::Relaxed, Ordering::Relaxed);
     };
     let err = move |e: cpal::Error| {
         eprintln!("daisycap: audio output: {e}");

@@ -134,6 +134,68 @@ pub enum ClickEffect {
     Ripple { strength: f64 },
 }
 
+/// Flavour of the synthesized click sound.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClickSound {
+    /// The original DaisyCap click.
+    #[default]
+    Classic,
+    /// Low and muted.
+    Soft,
+    /// Bright and snappy.
+    Sharp,
+    /// A mechanical-switch thud.
+    Thock,
+    /// A typewriter lever clack.
+    Typewriter,
+    /// A bubbly pop.
+    Pop,
+}
+
+impl ClickSound {
+    pub const ALL: [ClickSound; 6] = [ClickSound::Classic, ClickSound::Soft, ClickSound::Sharp, ClickSound::Thock, ClickSound::Typewriter, ClickSound::Pop];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ClickSound::Classic => "Classic",
+            ClickSound::Soft => "Soft",
+            ClickSound::Sharp => "Sharp",
+            ClickSound::Thock => "Thock",
+            ClickSound::Typewriter => "Typewriter",
+            ClickSound::Pop => "Pop",
+        }
+    }
+}
+
+/// Flavour of the synthesized keyboard sound.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeySound {
+    /// A mechanical-switch thud.
+    #[default]
+    Mech,
+    /// A clacky typewriter key.
+    Typewriter,
+    /// A quiet laptop tick.
+    Soft,
+    /// A bubbly pop.
+    Pop,
+}
+
+impl KeySound {
+    pub const ALL: [KeySound; 4] = [KeySound::Mech, KeySound::Typewriter, KeySound::Soft, KeySound::Pop];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            KeySound::Mech => "Mech thock",
+            KeySound::Typewriter => "Typewriter",
+            KeySound::Soft => "Soft laptop",
+            KeySound::Pop => "Pop",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CursorSkin {
@@ -357,7 +419,17 @@ pub struct AudioStyle {
     pub music: Option<String>,
     pub music_volume: f64,
     pub click_sounds: bool,
+    pub click_sound: ClickSound,
     pub click_volume: f64,
+    /// Keyboard sounds at every key press.
+    pub key_sounds: bool,
+    pub key_sound: KeySound,
+    pub key_volume: f64,
+    /// Only keys typed without ⌘/⌃: shortcut bursts stay quiet.
+    pub key_typing_only: bool,
+    /// A soft whoosh when a zoom starts.
+    pub zoom_whoosh: bool,
+    pub whoosh_volume: f64,
     /// Lower the recorded audio while a voice-over plays.
     pub duck_under_voiceover: bool,
     /// Level of the recorded audio under a voice-over (0..1).
@@ -374,7 +446,14 @@ impl Default for AudioStyle {
             music: None,
             music_volume: 0.05,
             click_sounds: false,
+            click_sound: ClickSound::default(),
             click_volume: 0.25,
+            key_sounds: false,
+            key_sound: KeySound::default(),
+            key_volume: 0.2,
+            key_typing_only: false,
+            zoom_whoosh: false,
+            whoosh_volume: 0.35,
             duck_under_voiceover: true,
             duck_level: 0.15,
         }
@@ -416,6 +495,8 @@ pub struct Style {
     /// Zoom level used for new automatic zooms.
     pub default_zoom: f64,
     pub device: DeviceFrame,
+    /// The DaisyCap daisy mark in the bottom-left corner of the video.
+    pub watermark: bool,
 }
 
 impl Default for Style {
@@ -438,6 +519,7 @@ impl Default for Style {
             audio: AudioStyle::default(),
             default_zoom: 2.0,
             device: DeviceFrame::None,
+            watermark: true,
         }
     }
 }
