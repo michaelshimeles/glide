@@ -53,11 +53,22 @@ pub fn labelled(ui: &mut Ui, label: &str, pro: bool) -> Option<Response> {
 fn toolbox(ui: &mut Ui, badge: &Response) {
     let id = badge.id.with("pro-toolbox");
     let mut open = ui.ctx().memory(|m| m.data.get_temp::<bool>(id)).unwrap_or(false);
-    if badge.hovered() || badge.clicked() {
+    // Escape while the pointer is still on the badge: don't let hover reopen
+    // it until the pointer has left.
+    let mut armed = ui.ctx().memory(|m| m.data.get_temp::<bool>(id.with("armed"))).unwrap_or(false);
+    if badge.hovered() {
+        if !armed {
+            open = true;
+        }
+    } else {
+        armed = false;
+    }
+    if badge.clicked() {
         open = true;
     }
     if ui.input(|i| i.key_pressed(Key::Escape)) {
         open = false;
+        armed = true;
     }
     if open {
         let inner = egui::Popup::from_response(badge)
@@ -72,6 +83,7 @@ fn toolbox(ui: &mut Ui, badge: &Response) {
         }
     }
     ui.ctx().memory_mut(|m| m.data.insert_temp(id, open));
+    ui.ctx().memory_mut(|m| m.data.insert_temp(id.with("armed"), armed));
 }
 
 fn content(ui: &mut Ui) {

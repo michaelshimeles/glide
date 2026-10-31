@@ -314,8 +314,8 @@ pub fn is_modifier(code: u16) -> bool {
 }
 
 /// A synthesized keyboard key: `code` picks a small pitch and gain variation
-/// (a real board never sounds identical twice), and space and return land
-/// heavier than letters.
+/// so neighbouring keys sound distinct, and space and return land heavier
+/// than letters.
 pub fn key_sound(kind: KeySound, code: u16) -> Vec<Stereo> {
     let t = match kind {
         KeySound::Mech => Tick {

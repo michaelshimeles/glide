@@ -109,13 +109,15 @@ struct MixKey {
     audio: AudioStyle,
     slices: Vec<Slice>,
     voiceovers: Vec<VoiceOver>,
+    /// The whoosh follows zoom starts.
+    zooms: Vec<crate::project::model::Zoom>,
 }
 
 impl MixKey {
     fn of(p: &Project) -> MixKey {
         let mut audio = p.style.audio.clone();
         audio.volume = 1.0;
-        MixKey { audio, slices: p.timeline.slices.clone(), voiceovers: p.timeline.voiceovers.clone() }
+        MixKey { audio, slices: p.timeline.slices.clone(), voiceovers: p.timeline.voiceovers.clone(), zooms: p.timeline.zooms.clone() }
     }
 }
 
@@ -244,6 +246,11 @@ impl AudioPreview {
     /// If the output can't be opened, `sync` keeps retrying while playing.
     pub fn play(&mut self, at_ms: f64) {
         self.seek(at_ms);
+        // A finished audition stays in memory for stream rebuilds; keep it
+        // only while it is still sounding.
+        if !self.oneshot_until.is_some_and(|t| Instant::now() < t) {
+            *self.shared.oneshot.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
         self.shared.playing.store(true, Ordering::Relaxed);
         if let Err(e) = self.ensure_output() {
             self.error = Some(format!("No audio output: {e:#}"));
@@ -270,6 +277,11 @@ impl AudioPreview {
         if let Some(t) = self.activity.take() {
             // SAFETY: the token came from beginActivity and is ended once.
             unsafe { objc2_foundation::NSProcessInfo::processInfo().endActivity(&t.0) };
+        }
+        // Keep the device running while an audition is heard; `tick` pauses
+        // it once the sound has played.
+        if self.oneshot_until.is_some_and(|t| Instant::now() < t) {
+            return;
         }
         if let Some(o) = &self.output {
             // Stopping the device lets the Mac sleep; restarting is instant.
@@ -301,12 +313,14 @@ impl AudioPreview {
     }
 
     /// If nothing is playing and the last audition has finished, put the
-    /// output device back to sleep.
+    /// output device back to sleep (and forget the sound, so a rebuilt
+    /// stream doesn't replay it).
     fn release_when_idle(&mut self) {
         if self.is_playing() || !self.oneshot_until.is_some_and(|t| Instant::now() >= t) {
             return;
         }
         self.oneshot_until = None;
+        *self.shared.oneshot.lock().unwrap_or_else(|e| e.into_inner()) = None;
         if let Some(o) = &self.output {
             let _ = o.stream.0.pause();
         }

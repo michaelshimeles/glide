@@ -660,7 +660,7 @@ impl Renderer {
             && let Some(t) = self.textures.get(&TexId::Watermark)
             && t.size.0 > 1
         {
-            let hgt = 58.0 * k;
+            let hgt = (58.0 * k).max(1.0);
             let wid = hgt * t.size.0 as f64 / t.size.1 as f64;
             let margin = 34.0 * k;
             let rect = Rect::new(margin, size.y - margin - hgt, wid, hgt);

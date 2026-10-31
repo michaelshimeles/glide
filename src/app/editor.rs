@@ -246,6 +246,7 @@ impl Editor {
     fn apply(&mut self, mut p: Project) {
         let audio_changed = p.timeline.slices != self.project.timeline.slices
             || p.timeline.voiceovers != self.project.timeline.voiceovers
+            || p.timeline.zooms != self.project.timeline.zooms
             || p.style.audio != self.project.style.audio;
         p.updated_ms = crate::recorder::now_ms();
         self.project = p;
