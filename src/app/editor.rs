@@ -136,6 +136,8 @@ pub struct Editor {
     pub transcribe_progress: std::sync::Arc<crate::whisper::Progress>,
     preset_name: String,
     pub looping: bool,
+    /// Preview overlay: the 9:16 feed and the area Reels/TikTok leave free.
+    pub reel_guide: bool,
     /// Voice-over being recorded.
     pub voice: Option<super::voiceover::VoiceRecorder>,
     pub deferred: Option<Deferred>,
@@ -202,6 +204,7 @@ impl Editor {
             transcribe_progress: Default::default(),
             preset_name: String::new(),
             looping: false,
+            reel_guide: false,
             voice: None,
             deferred: None,
             fresh: false,
@@ -678,6 +681,9 @@ impl Editor {
         if !cmd && pressed(egui::Key::L) {
             self.looping = !self.looping;
         }
+        if !cmd && pressed(egui::Key::G) {
+            self.reel_guide = !self.reel_guide;
+        }
         if cmd && pressed(egui::Key::E) {
             self.export.open = true;
         }
@@ -846,6 +852,9 @@ impl Editor {
                     ui.painter().add(shadow.as_shape(rect, CornerRadius::same(4)));
                     ui.painter().image(id, rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                 }
+                if self.reel_guide {
+                    super::reelguide::paint(&ui.painter().with_clip_rect(rect), rect);
+                }
                 // Click on the preview while a manual zoom is selected picks its
                 // target; with a mask selected, dragging draws or moves it.
                 let resp = ui.interact(rect, ui.id().with("preview"), Sense::click_and_drag());
@@ -920,6 +929,9 @@ impl Editor {
             ui.label(RichText::new(format!("{} / {}", fmt_time(self.playhead), fmt_time(self.duration()))).monospace());
             if ui.selectable_label(self.looping, "Loop").on_hover_text("Loop playback (L)").clicked() {
                 self.looping = !self.looping;
+            }
+            if ui.selectable_label(self.reel_guide, "Reels").on_hover_text("Show the 9:16 feed and the area Reels and TikTok leave free (G)").clicked() {
+                self.reel_guide = !self.reel_guide;
             }
             ui.separator();
             if ui.button("✂ Split").on_hover_text("Split at playhead (S)").clicked() {

@@ -148,6 +148,9 @@ enum Cmd {
         /// Show the just-recorded banner.
         #[arg(long)]
         fresh: bool,
+        /// Draw the Reels / TikTok guide over the preview.
+        #[arg(long)]
+        reel_guide: bool,
         #[arg(long)]
         light: bool,
         #[arg(long, default_value_t = 0.0)]
@@ -290,7 +293,7 @@ fn main() -> Result<()> {
             println!("{}", output.display());
             Ok(())
         }
-        Some(Cmd::Snapshot { project, tab, select, export_sheet, fresh, light, at, window, recents, live, permissions, output }) => {
+        Some(Cmd::Snapshot { project, tab, select, export_sheet, fresh, reel_guide, light, at, window, recents, live, permissions, output }) => {
             use glide::app::editor::Tab;
             let tab = tab.map(|t| {
                 Tab::ALL.iter().find(|(_, n)| n.eq_ignore_ascii_case(&t)).map(|(t, _)| *t).expect("unknown tab")
@@ -301,6 +304,7 @@ fn main() -> Result<()> {
                 select,
                 export_sheet,
                 fresh,
+                reel_guide,
                 dark: !light,
                 playhead_ms: at * 1000.0,
                 size: (1320.0, 840.0),

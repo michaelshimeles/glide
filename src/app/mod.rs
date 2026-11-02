@@ -13,6 +13,7 @@ pub mod menubar;
 pub mod permissions;
 pub mod player;
 pub mod preview;
+pub mod reelguide;
 pub mod snapshot;
 pub mod theme;
 pub mod timeline;
