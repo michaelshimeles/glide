@@ -20,6 +20,8 @@ pub struct Shot<'a> {
     pub export_sheet: bool,
     /// Show the just-recorded banner.
     pub fresh: bool,
+    /// Draw the Reels / TikTok guide over the preview.
+    pub reel_guide: bool,
     pub dark: bool,
     pub playhead_ms: f64,
     pub size: (f32, f32),
@@ -62,6 +64,7 @@ pub fn render(shot: &Shot, out_file: &Path) -> Result<()> {
         };
         ed.export.open = shot.export_sheet;
         ed.fresh = shot.fresh;
+        ed.reel_guide = shot.reel_guide;
         ed.seek(shot.playhead_ms);
     }
     let mut settings = Settings::default();
