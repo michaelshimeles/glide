@@ -106,3 +106,35 @@ fn export_carries_the_recorded_sound() {
     assert!((level.tone_db + 23.0).abs() < 1.5, "{level:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn export_puts_the_mic_and_the_system_sound_on_separate_tracks() {
+    use glide::project::recording::AudioTrack;
+    let (dir, path) = package("tracks", Some(880.0));
+    let pkg = glide::project::Package::new(&path);
+    let (mut project, mut recording) = pkg.load().unwrap();
+    // A 440 Hz "voice" on the microphone track, alongside the 880 Hz system tone.
+    let n = (recording.meta.duration_ms / 1000.0 * glide::capture::mixer::RATE) as usize;
+    let voice: Vec<[f32; 2]> = (0..n)
+        .map(|i| {
+            let v = 0.1 * (std::f64::consts::TAU * 440.0 * i as f64 / glide::capture::mixer::RATE).sin() as f32;
+            [v, v]
+        })
+        .collect();
+    glide::app::player::write_wav(&pkg.rec("mic.wav"), &voice).unwrap();
+    recording.meta.mic = Some(AudioTrack { file: "mic.wav".into(), track: 0 });
+    project.style.audio.enhance_mic = false;
+    let output = dir.join("out.mp4");
+    let settings = ExportSettings { height: 240, fps: 10, quality: Quality::Web, ..Default::default() };
+    let job = Job { project, recording, source: Source::Package(path.clone()), settings, output: output.clone() };
+    export::run(&job, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+
+    let system = glide::media::read_audio(&output, 0).expect("the export has a system track");
+    let mic = glide::media::read_audio(&output, 1).expect("the export has a mic track");
+    assert!(glide::media::read_audio(&output, 2).is_err(), "exactly two audio tracks");
+    let (sys_sys, sys_mic) = (glide::audiocheck::analyze(&system, 880.0), glide::audiocheck::analyze(&system, 440.0));
+    let (mic_sys, mic_mic) = (glide::audiocheck::analyze(&mic, 880.0), glide::audiocheck::analyze(&mic, 440.0));
+    assert!(sys_sys.tone_seconds > 1.8 && sys_mic.tone_seconds < 0.2, "system track: {sys_sys:?} {sys_mic:?}");
+    assert!(mic_mic.tone_seconds > 1.8 && mic_sys.tone_seconds < 0.2, "mic track: {mic_mic:?} {mic_sys:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
