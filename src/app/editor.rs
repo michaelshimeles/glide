@@ -350,6 +350,21 @@ impl Editor {
         });
     }
 
+    /// Drop everything before (`keep_after`) or after the playhead in the
+    /// slice under it, like CapCut's Q and W.
+    pub fn trim_to_playhead(&mut self, keep_after: bool) {
+        let src = self.source_at_playhead();
+        let duration = self.rec.meta.duration_ms;
+        let start_pb = self.preview.scene.map.link_at_playback(self.playhead).map(|l| l.pb_start);
+        let mut trimmed = false;
+        self.edit(|p| trimmed = crate::engine::typing::trim_at(&mut p.timeline, duration, src, keep_after));
+        if trimmed && keep_after {
+            if let Some(pb) = start_pb {
+                self.seek(pb);
+            }
+        }
+    }
+
     /// Cut a range where content under a mask moved out of the edit.
     pub fn cut_exposure(&mut self, e: crate::exposure::Exposure) {
         let duration = self.preview.scene.map.source_end();
@@ -670,7 +685,7 @@ impl Editor {
         }
         if cmd && pressed(egui::Key::Z) {
             if shift { self.redo() } else { self.undo() }
-        } else if pressed(egui::Key::S) && !cmd {
+        } else if (pressed(egui::Key::S) && !cmd) || (cmd && !shift && pressed(egui::Key::B)) {
             self.split();
         } else if pressed(egui::Key::Z) && !cmd {
             self.add_zoom();
@@ -692,6 +707,18 @@ impl Editor {
         }
         if pressed(egui::Key::Delete) || pressed(egui::Key::Backspace) {
             self.delete_selection();
+        }
+        if !cmd && pressed(egui::Key::Q) {
+            self.trim_to_playhead(true);
+        }
+        if !cmd && pressed(egui::Key::W) {
+            self.trim_to_playhead(false);
+        }
+        if pressed(egui::Key::Home) {
+            self.seek(0.0);
+        }
+        if pressed(egui::Key::End) {
+            self.seek(self.duration());
         }
         let step = 1000.0 / 60.0;
         if pressed(egui::Key::ArrowLeft) {
@@ -934,7 +961,7 @@ impl Editor {
                 self.reel_guide = !self.reel_guide;
             }
             ui.separator();
-            if ui.button("✂ Split").on_hover_text("Split at playhead (S)").clicked() {
+            if ui.button("✂ Split").on_hover_text("Split at playhead (S or ⌘B). Q trims everything before the playhead, W everything after.").clicked() {
                 self.split();
             }
             if ui.button("+ Zoom").on_hover_text("Add zoom at playhead (Z)").clicked() {
