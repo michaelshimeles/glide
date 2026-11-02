@@ -243,24 +243,50 @@ pub fn duck_envelope(len: usize, spans: &[(usize, usize)], level: f32) -> Vec<f3
     env
 }
 
-/// Build the export soundtrack. Returns None when there's nothing to hear.
-pub fn mix(project: &Project, rec: &Recording, dir: Option<&Path>, map: &TimeMap) -> Option<Vec<Stereo>> {
-    let mut out = mix_unmastered(project, rec, dir, map)?;
+/// The soundtrack split in two: what the Mac played (with the music and click
+/// sounds) and what was said (the microphone and voice-overs). A side is None
+/// when it has nothing to hear.
+pub struct Stems {
+    pub system: Option<Vec<Stereo>>,
+    pub mic: Option<Vec<Stereo>>,
+}
+
+/// The export's audio tracks, each with the master volume and limiter applied.
+pub fn stems(project: &Project, rec: &Recording, dir: Option<&Path>, map: &TimeMap) -> Stems {
+    let mut s = stems_unmastered(project, rec, dir, map);
     let v = project.style.audio.volume as f32;
-    for o in out.iter_mut() {
+    for o in s.system.iter_mut().chain(s.mic.iter_mut()).flatten() {
         o[0] = soft_clip(o[0] * v);
         o[1] = soft_clip(o[1] * v);
     }
-    Some(out)
+    s
 }
 
-/// The soundtrack before the master volume and limiter (the editor's
-/// playback applies those live). None when nothing is audible.
+/// The soundtrack as one mix before the master volume and limiter (the
+/// editor's playback applies those live). None when nothing is audible.
 pub fn mix_unmastered(project: &Project, rec: &Recording, dir: Option<&Path>, map: &TimeMap) -> Option<Vec<Stereo>> {
+    let s = stems_unmastered(project, rec, dir, map);
+    match (s.system, s.mic) {
+        (Some(mut a), Some(b)) => {
+            for (o, s) in a.iter_mut().zip(&b) {
+                o[0] += s[0];
+                o[1] += s[1];
+            }
+            Some(a)
+        }
+        (a, b) => a.or(b),
+    }
+}
+
+/// `stems` before the master volume and limiter. Ducking under a voice-over
+/// applies to the recorded system audio and microphone; music and clicks stay
+/// on the system side and voice-overs on the mic side.
+fn stems_unmastered(project: &Project, rec: &Recording, dir: Option<&Path>, map: &TimeMap) -> Stems {
     let style = &project.style.audio;
     let len = (map.duration() / 1000.0 * RATE).ceil() as usize;
-    let mut out = vec![[0.0f32; 2]; len];
-    let mut any = false;
+    let mut system = vec![[0.0f32; 2]; len];
+    let mut mic_out = vec![[0.0f32; 2]; len];
+    let (mut any_system, mut any_mic) = (false, false);
     let slices = &project.timeline.slices;
     // Voice-overs, placed at their playback position at normal speed.
     let mut voice = vec![[0.0f32; 2]; len];
@@ -270,8 +296,8 @@ pub fn mix_unmastered(project: &Project, rec: &Recording, dir: Option<&Path>, ma
         if !style.mute_system
             && let Some(sys) = load(&rd, &rec.meta.system_audio)
         {
-            retime(&sys, map, |i| slices.get(i).map_or(1.0, |s| s.system_volume as f32), &mut out);
-            any = true;
+            retime(&sys, map, |i| slices.get(i).map_or(1.0, |s| s.system_volume as f32), &mut system);
+            any_system = true;
         }
         if !style.mute_mic
             && let Some(mut mic) = load(&rd, &rec.meta.mic)
@@ -281,8 +307,8 @@ pub fn mix_unmastered(project: &Project, rec: &Recording, dir: Option<&Path>, ma
             {
                 mic = cleaned(dir, &t.file, t.track, mic);
             }
-            retime(&mic, map, |i| slices.get(i).map_or(1.0, |s| s.mic_volume as f32), &mut out);
-            any = true;
+            retime(&mic, map, |i| slices.get(i).map_or(1.0, |s| s.mic_volume as f32), &mut mic_out);
+            any_mic = true;
         }
         for vo in &project.timeline.voiceovers {
             let Some(mut buf) = crate::media::read_audio(&rd.join(&vo.file), 0).ok().filter(|b| !b.is_empty()) else { continue };
@@ -298,32 +324,34 @@ pub fn mix_unmastered(project: &Project, rec: &Recording, dir: Option<&Path>, ma
                 }
             }
             spans.push((at.min(len), (at + buf.len()).min(len)));
-            any = true;
+            any_mic = true;
         }
     }
     if style.duck_under_voiceover && !spans.is_empty() {
         let env = duck_envelope(len, &spans, style.duck_level as f32);
-        for (o, e) in out.iter_mut().zip(env) {
-            o[0] *= e;
-            o[1] *= e;
+        for ((s, m), e) in system.iter_mut().zip(mic_out.iter_mut()).zip(env) {
+            s[0] *= e;
+            s[1] *= e;
+            m[0] *= e;
+            m[1] *= e;
         }
     }
-    for (o, v) in out.iter_mut().zip(&voice) {
+    for (o, v) in mic_out.iter_mut().zip(&voice) {
         o[0] += v[0];
         o[1] += v[1];
     }
     if let Some(music) = style.music.as_ref().and_then(|p| crate::media::read_audio(Path::new(p), 0).ok()).filter(|m| !m.is_empty()) {
         let g = style.music_volume as f32;
         // Fade the music out over the last second.
-        let n = out.len();
+        let n = system.len();
         let fade = (RATE as usize).min(n).max(1);
-        for (j, o) in out.iter_mut().enumerate() {
+        for (j, o) in system.iter_mut().enumerate() {
             let f = if j + fade > n { (n - j) as f32 / fade as f32 } else { 1.0 };
             let s = music[j % music.len()];
             o[0] += s[0] * g * f;
             o[1] += s[1] * g * f;
         }
-        any = true;
+        any_system = true;
     }
     if style.click_sounds {
         let click = click_sound();
@@ -332,16 +360,16 @@ pub fn mix_unmastered(project: &Project, rec: &Recording, dir: Option<&Path>, ma
             if let Some(pb) = map.to_playback(d.t) {
                 let at = (pb / 1000.0 * RATE) as usize;
                 for (k, s) in click.iter().enumerate() {
-                    if let Some(o) = out.get_mut(at + k) {
+                    if let Some(o) = system.get_mut(at + k) {
                         o[0] += s[0] * g;
                         o[1] += s[1] * g;
                     }
                 }
             }
         }
-        any = true;
+        any_system = true;
     }
-    any.then_some(out)
+    Stems { system: any_system.then_some(system), mic: any_mic.then_some(mic_out) }
 }
 
 #[cfg(test)]

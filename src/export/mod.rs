@@ -309,7 +309,10 @@ fn run_pass(job: &Job, bitrate: Option<u64>, progress: ProgressFn, cancel: &Atom
     }
     let result = match s.format {
         ExportFormat::Mp4 => {
-            let soundtrack = audio::mix(&job.project, &job.recording, dir, &scene.map);
+            // The Mac's sound and the voice go on separate tracks (system
+            // first); with only one of them there is one track.
+            let stems = audio::stems(&job.project, &job.recording, dir, &scene.map);
+            let soundtracks: Vec<_> = [stems.system, stems.mic].into_iter().flatten().map(Arc::new).collect();
             let mut writer = MovieWriter::create(
                 &job.output,
                 &WriterSpec {
@@ -320,12 +323,10 @@ fn run_pass(job: &Job, bitrate: Option<u64>, progress: ProgressFn, cancel: &Atom
                     bitrate: bitrate.unwrap_or_else(|| s.bitrate(w, h, scene.duration() / 1000.0)),
                     // Fit to size needs a bitrate; otherwise encode for quality.
                     quality: (bitrate.is_none() && !(s.target_mb.is_some() && s.fits_size())).then(|| s.quality.encoder_quality()),
-                    audio: soundtrack.is_some(),
+                    audio_tracks: soundtracks.len(),
                 },
             )?;
-            if let Some(m) = soundtrack {
-                writer.set_soundtrack(Arc::new(m));
-            }
+            writer.set_soundtracks(soundtracks);
             let cache = TextureCache::new(&pump.renderer.gpu().device);
             let result = match &cache {
                 Some(cache) => mp4_zero_copy(job, &mut scene, &mut pump, &mut inputs, cache, &mut writer, total, progress, cancel),

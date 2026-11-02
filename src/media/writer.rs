@@ -1,5 +1,5 @@
 //! Offline movie writer for export: VideoToolbox H.264/HEVC through
-//! AVAssetWriter, plus an optional AAC stereo track.
+//! AVAssetWriter, plus AAC stereo tracks.
 
 use std::path::Path;
 use std::sync::mpsc;
@@ -30,18 +30,23 @@ pub struct WriterSpec {
     pub bitrate: u64,
     /// Constant quality 0..1 (VideoToolbox spends what each frame needs).
     pub quality: Option<f64>,
-    pub audio: bool,
+    /// How many AAC stereo tracks to write (0 = silent).
+    pub audio_tracks: usize,
+}
+
+struct AudioTrack {
+    input: Retained<AVAssetWriterInput>,
+    samples: Option<std::sync::Arc<Vec<[f32; 2]>>>,
+    written: usize,
+    done: bool,
 }
 
 pub struct MovieWriter {
     writer: Retained<AVAssetWriter>,
     video: Retained<AVAssetWriterInput>,
     adaptor: Retained<AVAssetWriterInputPixelBufferAdaptor>,
-    audio: Option<Retained<AVAssetWriterInput>>,
+    audio: Vec<AudioTrack>,
     audio_fmt: CFRetained<CMAudioFormatDescription>,
-    audio_written: usize,
-    soundtrack: Option<std::sync::Arc<Vec<[f32; 2]>>>,
-    audio_done: bool,
     fps: u32,
     pub frames: u64,
     path: std::path::PathBuf,
@@ -147,7 +152,8 @@ impl MovieWriter {
                 bail!("cannot add video input ({}x{} {:?})", s.width, s.height, s.codec);
             }
             writer.addInput(&video);
-            let audio = if s.audio {
+            let mut audio = Vec::new();
+            for _ in 0..s.audio_tracks {
                 let a = AVAssetWriterInput::initWithMediaType_outputSettings(
                     AVAssetWriterInput::alloc(),
                     AVMediaTypeAudio.unwrap(),
@@ -163,10 +169,8 @@ impl MovieWriter {
                     bail!("cannot add audio input");
                 }
                 writer.addInput(&a);
-                Some(a)
-            } else {
-                None
-            };
+                audio.push(AudioTrack { input: a, samples: None, written: 0, done: false });
+            }
             if !writer.startWriting() {
                 bail!("start writing: {}", err_text(&writer));
             }
@@ -177,9 +181,6 @@ impl MovieWriter {
                 adaptor,
                 audio,
                 audio_fmt: mixer::stereo_format(),
-                audio_written: 0,
-                soundtrack: None,
-                audio_done: false,
                 fps: s.fps,
                 frames: 0,
                 path: abs,
@@ -197,46 +198,54 @@ impl MovieWriter {
         }
     }
 
-    /// Interleaved stereo at 48 kHz to write alongside the frames.
-    pub fn set_soundtrack(&mut self, mix: std::sync::Arc<Vec<[f32; 2]>>) {
-        self.soundtrack = Some(mix);
+    /// Stereo at 48 kHz for each audio track, in track order, to write
+    /// alongside the frames.
+    pub fn set_soundtracks(&mut self, tracks: Vec<std::sync::Arc<Vec<[f32; 2]>>>) {
+        for (t, m) in self.audio.iter_mut().zip(tracks) {
+            t.samples = Some(m);
+        }
     }
 
-    fn stalled(&self, input: &AVAssetWriterInput) -> anyhow::Error {
-        let which = if std::ptr::eq(input, &*self.video) { "video" } else { "audio" };
+    fn stalled(&self, video: bool) -> anyhow::Error {
+        let written = self.audio.iter().map(|t| t.written).min().unwrap_or(0);
         anyhow!(
-            "encoder stalled waiting for {which} (video frames {}, audio {:.2} s)",
+            "encoder stalled waiting for {} (video frames {}, audio {:.2} s)",
+            if video { "video" } else { "audio" },
             self.frames,
-            self.audio_written as f64 / mixer::RATE
+            written as f64 / mixer::RATE
         )
     }
 
-    /// Append one audio chunk if the audio input will take it.
+    /// Append one audio chunk to each track whose input will take it.
     fn feed_audio_chunk(&mut self, until: usize) -> Result<bool> {
-        let (Some(audio), Some(mix)) = (self.audio.clone(), self.soundtrack.clone()) else { return Ok(false) };
-        if self.audio_done {
-            return Ok(false);
+        let mut fed = false;
+        for t in self.audio.iter_mut() {
+            let Some(mix) = t.samples.clone() else { continue };
+            if t.done {
+                continue;
+            }
+            if t.written >= mix.len() {
+                // Tell the writer the track is complete so video isn't held
+                // back waiting to interleave with audio that never comes.
+                unsafe { t.input.markAsFinished() };
+                t.done = true;
+                continue;
+            }
+            let until = until.min(mix.len());
+            if t.written >= until || !unsafe { t.input.isReadyForMoreMediaData() } {
+                continue;
+            }
+            let n = (until - t.written).min(4800);
+            let chunk: Vec<f32> = mix[t.written..t.written + n].iter().flat_map(|s| [s[0], s[1]]).collect();
+            let pts = unsafe { CMTime::new(t.written as i64, mixer::RATE as i32) };
+            let sb = mixer::pcm_buffer(&self.audio_fmt, chunk, pts).ok_or_else(|| anyhow!("audio buffer"))?;
+            if !unsafe { t.input.appendSampleBuffer(&sb) } {
+                bail!("append audio: {}", err_text(&self.writer));
+            }
+            t.written += n;
+            fed = true;
         }
-        if self.audio_written >= mix.len() {
-            // Tell the writer the track is complete so video isn't held
-            // back waiting to interleave with audio that never comes.
-            unsafe { audio.markAsFinished() };
-            self.audio_done = true;
-            return Ok(false);
-        }
-        let until = until.min(mix.len());
-        if self.audio_written >= until || !unsafe { audio.isReadyForMoreMediaData() } {
-            return Ok(false);
-        }
-        let n = (until - self.audio_written).min(4800);
-        let chunk: Vec<f32> = mix[self.audio_written..self.audio_written + n].iter().flat_map(|s| [s[0], s[1]]).collect();
-        let pts = unsafe { CMTime::new(self.audio_written as i64, mixer::RATE as i32) };
-        let sb = mixer::pcm_buffer(&self.audio_fmt, chunk, pts).ok_or_else(|| anyhow!("audio buffer"))?;
-        if !unsafe { audio.appendSampleBuffer(&sb) } {
-            bail!("append audio: {}", err_text(&self.writer));
-        }
-        self.audio_written += n;
-        Ok(true)
+        Ok(fed)
     }
 
     /// Append the next frame (frames are evenly spaced at the export fps).
@@ -257,7 +266,7 @@ impl MovieWriter {
                 std::thread::sleep(Duration::from_millis(1));
                 spins += 1;
                 if spins > 10_000 {
-                    return Err(self.stalled(&self.video));
+                    return Err(self.stalled(true));
                 }
             }
         }
@@ -271,10 +280,9 @@ impl MovieWriter {
 
     /// Write any remaining audio.
     fn drain_audio(&mut self) -> Result<()> {
-        let Some(audio) = self.audio.clone() else { return Ok(()) };
-        let Some(len) = self.soundtrack.as_ref().map(|m| m.len()) else { return Ok(()) };
+        let Some(len) = self.audio.iter().filter_map(|t| t.samples.as_ref().map(|m| m.len())).max() else { return Ok(()) };
         let mut spins = 0;
-        while !self.audio_done {
+        while self.audio.iter().any(|t| t.samples.is_some() && !t.done) {
             if !self.feed_audio_chunk(len)? {
                 if unsafe { self.writer.status() } == AVAssetWriterStatus::Failed {
                     bail!("encoder failed: {}", err_text(&self.writer));
@@ -283,7 +291,7 @@ impl MovieWriter {
                 std::thread::sleep(Duration::from_millis(1));
                 spins += 1;
                 if spins > 10_000 {
-                    return Err(self.stalled(&audio));
+                    return Err(self.stalled(false));
                 }
             }
         }
@@ -296,10 +304,8 @@ impl MovieWriter {
             let end = CMTime::new(self.frames as i64 * (TIMESCALE as i64 / self.fps as i64), TIMESCALE);
             self.writer.endSessionAtSourceTime(end);
             self.video.markAsFinished();
-            if let Some(a) = &self.audio
-                && !self.audio_done
-            {
-                a.markAsFinished();
+            for t in self.audio.iter().filter(|t| !t.done) {
+                t.input.markAsFinished();
             }
             let (tx, rx) = mpsc::channel();
             let block = RcBlock::new(move || {

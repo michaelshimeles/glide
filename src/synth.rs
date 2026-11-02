@@ -165,7 +165,7 @@ fn write(output: &std::path::Path, rec: Recording, duration: f64) -> anyhow::Res
     let fps = 60u32;
     let mut w = MovieWriter::create(
         &pkg.rec("screen.mov"),
-        &WriterSpec { width, height, fps, codec: Codec::Hevc, bitrate: (width * height) as u64 * 8, quality: None, audio: false },
+        &WriterSpec { width, height, fps, codec: Codec::Hevc, bitrate: (width * height) as u64 * 8, quality: None, audio_tracks: 0 },
     )?;
     let frames = (duration * fps as f64) as u64;
     for i in 0..frames {

@@ -10,7 +10,7 @@ Milestones and parity track the checklist in `analysis/SCREEN_STUDIO.md`.
 | M2 | GPU renderer (wgpu/Metal): background, shadow, rounded window + inset, cursor, click FX, motion blur, camera, text, masks, device frames | ☑ |
 | M3 | Media: AVAssetReader decode with seeking and prefetch | ☑ |
 | M4 | Recording: ScreenCaptureKit display/window/area, system audio, mic, camera, input + cursor logging, iOS devices | ☑ (capture core from rec-rs) |
-| M5 | Export: MP4 (VideoToolbox H.264/HEVC, zero-copy), audio mix with cuts/speed/voice-over ducking, GIF | ☑ |
+| M5 | Export: MP4 (VideoToolbox H.264/HEVC, zero-copy), audio with cuts/speed/voice-over ducking (MP4 gets the Mac's sound and the microphone on two tracks), GIF | ☑ |
 | M6 | Editor UI (egui + Inter): one editor-first window (recording setup, recents popover), preview, inspector, timeline, recording widget, area/window pickers, menu bar, shortcuts | ☑ |
 | M7 | Captions (Apple Speech, on device, editable), shortcut overlay | ☑ |
 | M8 | App bundle, icon, signing (`scripts/build.sh`) | ☑ |
