@@ -272,6 +272,9 @@ pub struct CameraStyle {
     pub aspect: CameraAspect,
     /// Bubble scale while the screen is zoomed in.
     pub zoom_scale: f64,
+    /// Camera across the top third of a 9:16 frame, the screen in the rest,
+    /// instead of a bubble over the screen.
+    pub stacked: bool,
 }
 
 impl CameraStyle {
@@ -315,6 +318,7 @@ impl Default for CameraStyle {
             position: v2(1.0, 1.0),
             aspect: CameraAspect::Original,
             zoom_scale: 0.7,
+            stacked: false,
         }
     }
 }

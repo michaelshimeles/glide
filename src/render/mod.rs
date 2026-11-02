@@ -587,7 +587,8 @@ impl Renderer {
             }
         }
         {
-            let mut d = Draw::new(MODE_COMPOSITE, full, size);
+            // Stacked, the screen never reaches into the camera band.
+            let mut d = Draw::new(MODE_COMPOSITE, frame.clip.unwrap_or(full), size);
             d.p2 = [frame.backdrop_blur as f32, win.blur.velocity.x as f32, win.blur.velocity.y as f32, 0.0];
             d.p4 = [0.0, win.blur.zoom as f32, win.blur.zoom_center.x as f32, win.blur.zoom_center.y as f32];
             main.push((d, TexId::Layer));
