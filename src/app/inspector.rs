@@ -220,14 +220,20 @@ fn background(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
             });
             slider(ui, "Inset opacity", &mut s.inset.alpha, 0.0..=1.0, "");
         }
-        row(ui, "Aspect ratio", |ui| {
-            let label = Aspect::PRESETS.iter().find(|(_, a)| *a == s.aspect).map_or("Custom", |(n, _)| n);
-            egui::ComboBox::from_id_salt("aspect").selected_text(label).show_ui(ui, |ui| {
-                for (n, a) in Aspect::PRESETS {
-                    ui.selectable_value(&mut s.aspect, a, n);
-                }
+        if s.camera.stacked {
+            row(ui, "Aspect ratio", |ui| {
+                ui.label("Vertical 9:16 (stacked camera)");
             });
-        });
+        } else {
+            row(ui, "Aspect ratio", |ui| {
+                let label = Aspect::PRESETS.iter().find(|(_, a)| *a == s.aspect).map_or("Custom", |(n, _)| n);
+                egui::ComboBox::from_id_salt("aspect").selected_text(label).show_ui(ui, |ui| {
+                    for (n, a) in Aspect::PRESETS {
+                        ui.selectable_value(&mut s.aspect, a, n);
+                    }
+                });
+            });
+        }
     });
     section(ui, "Shadow", |ui| {
         slider(ui, "Intensity", &mut s.shadow.intensity, 0.0..=1.0, "");
@@ -353,6 +359,12 @@ fn camera(ui: &mut Ui, d: &mut Project, has: bool) {
     let c = &mut d.style.camera;
     section(ui, "Camera", |ui| {
         toggle_row(ui, "Hide camera", &mut c.hide);
+        toggle_row(ui, "Stack on top", &mut c.stacked);
+        if c.stacked {
+            caption(ui, "9:16 for TikTok and Reels: the camera fills the top third, the screen the rest.");
+            toggle_row(ui, "Mirror", &mut c.mirror);
+            return;
+        }
         widgets::camera_look(ui, c);
         if !c.shape.is_square() {
             row(ui, "Aspect", |ui| {
@@ -361,6 +373,9 @@ fn camera(ui: &mut Ui, d: &mut Project, has: bool) {
         }
         slider(ui, "Size while zoomed", &mut c.zoom_scale, 0.3..=1.0, "×");
     });
+    if c.stacked {
+        return;
+    }
     section(ui, "Fine position", |ui| {
         slider(ui, "Horizontal", &mut c.position.x, 0.0..=1.0, "");
         slider(ui, "Vertical", &mut c.position.y, 0.0..=1.0, "");

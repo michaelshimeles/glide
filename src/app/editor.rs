@@ -911,8 +911,8 @@ impl Editor {
         let out = egui::vec2(sizes.output.x as f32, sizes.output.y as f32);
         let px = egui::vec2(at.x * out.x, at.y * out.y);
         let body = sizes.default_body();
-        let x = ((px.x as f64 - sizes.pad - body.x) / body.w).clamp(0.0, 1.0);
-        let y = ((px.y as f64 - sizes.pad - body.y) / body.h).clamp(0.0, 1.0);
+        let x = ((px.x as f64 - sizes.origin.x - body.x) / body.w).clamp(0.0, 1.0);
+        let y = ((px.y as f64 - sizes.origin.y - body.y) / body.h).clamp(0.0, 1.0);
         self.edit(|p| {
             if let Some(z) = p.timeline.zooms.iter_mut().find(|z| z.id == id) {
                 z.mode = crate::project::model::ZoomMode::Manual { target: crate::engine::geom::v2(x, y) };

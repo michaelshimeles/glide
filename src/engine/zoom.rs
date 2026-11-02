@@ -124,7 +124,7 @@ pub fn place(sizes: &Sizes, focus: Focus) -> (f64, Vec2) {
     let s = crop.scalar_of(focus.point).clamp(0.0, 1.0);
     // Push targets near edges fully to the edge.
     let body = sizes.default_body();
-    let visible = sizes.output / sizes.initial_zoom / scale;
+    let visible = sizes.view / sizes.initial_zoom / scale;
     let max_snap = visible.div(sizes.content);
     let r = v2(focus.snap.clamp(0.0, max_snap.x), focus.snap.clamp(0.0, max_snap.y));
     let s = v2(remap(s.x, r.x, 1.0 - r.x + 1e-4, 0.0, 1.0), remap(s.y, r.y, 1.0 - r.y + 1e-4, 0.0, 1.0));

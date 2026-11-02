@@ -132,6 +132,8 @@ pub struct Frame {
     pub source_ms: f64,
     /// Extra background/screen blur (camera-only layout), output pixels.
     pub backdrop_blur: f64,
+    /// The part of the frame the screen is clipped to (stacked layout).
+    pub clip: Option<Rect>,
     pub window: WindowLayer,
     pub cursor: Option<CursorLayer>,
     pub circles: Vec<CircleFx>,
@@ -266,8 +268,8 @@ impl Scene {
     fn window_rect(&mut self, f: i64, k: f64) -> (Rect, f64) {
         let v = self.screen_values(f);
         let body = self.sizes.default_body();
-        let pad = Vec2::splat(self.sizes.pad);
-        let min = pad + body.min() + v2(v[1], v[2]);
+        let origin = self.sizes.origin;
+        let min = origin + body.min() + v2(v[1], v[2]);
         (Rect::from_min_size(min, body.size() * v[0]).scale_about_origin(k), v[0])
     }
 
@@ -345,6 +347,9 @@ impl Scene {
             self.sizes.crop.size().mul(rect.size().div(self.sizes.window)),
         );
 
+        let clip = self.sizes.screen_clip().map(|c| c.scale_about_origin(k));
+        let in_clip = |p: Vec2| clip.is_none_or(|c| c.contains(p));
+
         // Cursor.
         let mut cursor = None;
         let mut circles = vec![];
@@ -371,7 +376,7 @@ impl Scene {
             };
             let image = Events::last_at(&self.events.all, src).map_or(0, |e| e.cursor);
             // A cursor outside the cropped screen isn't shown.
-            let visible = screen_rect.inset(-2.0).contains(pos);
+            let visible = screen_rect.inset(-2.0).contains(pos) && in_clip(pos);
             cursor = Some(CursorLayer {
                 pos,
                 height: cursor::BASE_HEIGHT * style.cursor.size * k * zoom_scale,
@@ -393,6 +398,7 @@ impl Scene {
                             alpha: c.alpha * 0.6,
                             blur: c.blur * k,
                         })
+                        .filter(|c| in_clip(c.pos))
                         .collect();
                 }
                 ClickEffect::Ripple { strength } => {
@@ -433,21 +439,40 @@ impl Scene {
                 let shown = camera::kind_at(&layouts, map.to_source(pb)) == LayoutKind::Both;
                 Target::new(if shown { vec![1.0, 0.0] } else { vec![0.0, 10.0] }, SpringConfig::FADE)
             });
-            let r = Rect::new(b[0], b[1], b[2], b[3]).scale_about_origin(k);
-            let aspect = camera::aspect(&cs, video);
-            let uv = centre_crop(video.aspect(), aspect);
             if vis[0] > 0.002 {
-                cam = Some(CameraLayer {
-                    rect: r,
-                    radius: cs.radius(r.w, r.h),
-                    squircle: cs.squircle_exponent(),
-                    border: cs.border_px(size.y),
-                    border_color: cs.border_color.to_f32(),
-                    shadow: cs.shadow,
-                    alpha: vis[0].clamp(0.0, 1.0),
-                    blur: vis[1].max(0.0) * k,
-                    mirror: cs.mirror,
-                    uv,
+                let (alpha, blur) = (vis[0].clamp(0.0, 1.0), vis[1].max(0.0) * k);
+                // Stacked, the camera is a plain band across the top.
+                cam = Some(match self.sizes.band {
+                    Some(band) => {
+                        let rect = band.scale_about_origin(k);
+                        CameraLayer {
+                            rect,
+                            radius: 0.0,
+                            squircle: 0.0,
+                            border: 0.0,
+                            border_color: [0.0; 4],
+                            shadow: false,
+                            alpha,
+                            blur,
+                            mirror: cs.mirror,
+                            uv: centre_crop(video.aspect(), rect.size().aspect()),
+                        }
+                    }
+                    None => {
+                        let rect = Rect::new(b[0], b[1], b[2], b[3]).scale_about_origin(k);
+                        CameraLayer {
+                            rect,
+                            radius: cs.radius(rect.w, rect.h),
+                            squircle: cs.squircle_exponent(),
+                            border: cs.border_px(size.y),
+                            border_color: cs.border_color.to_f32(),
+                            shadow: cs.shadow,
+                            alpha,
+                            blur,
+                            mirror: cs.mirror,
+                            uv: centre_crop(video.aspect(), camera::aspect(&cs, video)),
+                        }
+                    }
                 });
             }
             let full = self.anim.full.values_at(f, |pb| {
@@ -563,6 +588,7 @@ impl Scene {
             playback_ms: pb,
             source_ms: src,
             backdrop_blur: backdrop * k,
+            clip,
             window,
             cursor,
             circles,
@@ -598,7 +624,7 @@ pub fn centre_crop(from: f64, to: f64) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::model::Zoom;
+    use crate::project::model::{LayoutKind, LayoutRange, Zoom};
     use crate::project::recording::{MouseEvent, MouseKind, RecordingMeta, VideoTrack};
 
     fn recording() -> Recording {
@@ -652,5 +678,64 @@ mod tests {
         let f = s.frame(1000.0, 1080.0);
         let c = f.cursor.unwrap();
         assert!(f.window.rect.contains(c.pos), "{:?} in {:?}", c.pos, f.window.rect);
+    }
+
+    fn stacked_project() -> (Project, Recording) {
+        let mut rec = recording();
+        rec.meta.camera = Some(VideoTrack { file: "camera.mov".into(), width: 1280, height: 720, fps: 30.0, offset_ms: 0.0 });
+        let mut p = Project::default();
+        p.style.camera.stacked = true;
+        (p, rec)
+    }
+
+    #[test]
+    fn stacked_camera_fills_the_top_third() {
+        let (p, rec) = stacked_project();
+        let mut s = Scene::new(p, &rec, 60.0);
+        let f = s.frame(1000.0, 1920.0);
+        assert!((f.size.aspect() - 9.0 / 16.0).abs() < 1e-3);
+        let cam = f.camera.expect("camera band");
+        assert_eq!(cam.rect, Rect::new(0.0, 0.0, f.size.x, f.size.y / 3.0));
+        assert_eq!((cam.radius, cam.border, cam.shadow), (0.0, 0.0, false));
+        // The camera video is cropped to the band's shape, not stretched.
+        let band_aspect = cam.rect.w / cam.rect.h;
+        assert!(((cam.uv.w * 1280.0) / (cam.uv.h * 720.0) - band_aspect).abs() < 1e-6);
+        let clip = f.clip.expect("screen clip");
+        assert_eq!((clip.x, clip.w), (0.0, f.size.x));
+        assert!((clip.y - f.size.y / 3.0).abs() < 1e-6 && (clip.max().y - f.size.y).abs() < 1e-6, "{clip:?}");
+    }
+
+    #[test]
+    fn stacked_screen_stays_below_the_band() {
+        let (mut p, rec) = stacked_project();
+        p.timeline.zooms.push(Zoom { start: 2500.0, end: 6000.0, scale: 2.0, ..Default::default() });
+        let mut s = Scene::new(p, &rec, 60.0);
+        let band = s.sizes.band.unwrap().h;
+        let rest = s.frame(1000.0, 1920.0);
+        assert!(rest.window.rect.y >= band * 1920.0 / s.sizes.output.y - 1e-6, "{:?}", rest.window.rect);
+        // Zoomed in, the window still covers the whole area under the band.
+        let zoomed = s.frame(5000.0, 1920.0);
+        let clip = zoomed.clip.unwrap();
+        let w = zoomed.window.rect;
+        assert!(w.y <= clip.y + 1e-6 && w.max().y >= clip.max().y - 1e-6, "{w:?} vs {clip:?}");
+        assert!(w.x <= 1e-6 && w.max().x >= zoomed.size.x - 1e-6);
+    }
+
+    #[test]
+    fn stacked_screen_only_layout_hides_the_camera() {
+        let (mut p, rec) = stacked_project();
+        p.timeline.layouts.push(LayoutRange { start: 0.0, end: 10_000.0, kind: LayoutKind::ScreenOnly, ..Default::default() });
+        let mut s = Scene::new(p, &rec, 60.0);
+        assert!(s.frame(1000.0, 1920.0).camera.is_none());
+    }
+
+    #[test]
+    fn unstacked_frame_has_no_clip() {
+        let mut rec = recording();
+        rec.meta.camera = Some(VideoTrack { file: "camera.mov".into(), width: 1280, height: 720, fps: 30.0, offset_ms: 0.0 });
+        let mut s = Scene::new(Project::default(), &rec, 60.0);
+        let f = s.frame(1000.0, 1080.0);
+        assert_eq!(f.clip, None);
+        assert!(f.camera.unwrap().radius > 0.0);
     }
 }
