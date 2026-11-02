@@ -11,6 +11,12 @@ use objc2_av_foundation::{
 };
 use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
 
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGPreflightListenEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
+}
+
 const DISCLAIM_ENV: &str = "GLIDE_DISCLAIMED";
 
 /// Re-exec ourselves with responsibility disclaimed so TCC attributes screen,
@@ -195,6 +201,30 @@ pub fn request_all(screen: bool, mic: bool, camera: bool, wait: Duration) {
             Err(_) => eprintln!("{name}: prompt still pending (answer it on screen)"),
         }
     }
+}
+
+/// Input Monitoring, which the key-press log (and so the typing zoom) needs.
+pub fn input_status() -> Status {
+    if unsafe { CGPreflightListenEventAccess() } { Status::Granted } else { Status::Denied }
+}
+
+/// Ask for Input Monitoring: macOS shows its prompt the first time and lists
+/// Glide in System Settings after that.
+pub fn request_input() -> bool {
+    unsafe { CGRequestListenEventAccess() }
+}
+
+/// Ask for microphone or camera access; macOS shows its prompt once.
+pub fn request_av(video: bool) {
+    drop(av_request_async(video));
+}
+
+/// Show a Privacy & Security pane in System Settings (`Privacy_Microphone`,
+/// `Privacy_Camera`, `Privacy_ScreenCapture`, `Privacy_ListenEvent`,
+/// `Privacy_Accessibility`).
+pub fn open_settings(pane: &str) {
+    let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
+    let _ = std::process::Command::new("open").arg(url).status();
 }
 
 pub fn report() -> (Status, Status, Status) {

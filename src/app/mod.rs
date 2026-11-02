@@ -10,6 +10,7 @@ pub mod hotkey;
 pub mod inspector;
 pub mod macos;
 pub mod menubar;
+pub mod permissions;
 pub mod player;
 pub mod preview;
 pub mod snapshot;
@@ -325,6 +326,7 @@ struct App {
     last_tick: Instant,
     open_at_launch: Option<PathBuf>,
     permission_note: Option<String>,
+    perms: permissions::State,
     selftest: Option<SelfTest>,
     playtest: Option<PlayTest>,
 }
@@ -360,6 +362,9 @@ impl App {
             settings.countdown = false;
         }
         let projects = home::scan_projects(&settings.dir());
+        let mut perms = permissions::State::new(&settings);
+        // Scripted runs use test patterns and never need permissions.
+        perms.open &= !scripted;
         App {
             gpu: None,
             main: None,
@@ -384,6 +389,7 @@ impl App {
             last_tick: Instant::now(),
             open_at_launch: open,
             permission_note: permission_note(),
+            perms,
             selftest,
             playtest,
         }
@@ -705,6 +711,10 @@ impl App {
             Cmd::ToggleRecording => {
                 if self.recording.is_some() {
                     self.stop_recording();
+                } else if !self.scripted() && !self.perms_ready() {
+                    // Fix what's missing first, not after the countdown.
+                    self.perms.open = true;
+                    self.show_main(el);
                 } else {
                     self.start_recording(el);
                 }
@@ -1221,10 +1231,15 @@ impl App {
         }
         let was = home::CAPTURING_SHORTCUT.swap(false, Ordering::Relaxed);
         let note = self.permission_note.clone();
+        if matches!(self.view, View::Start) {
+            // Rows turn green as soon as the toggle in System Settings flips.
+            self.perms.refresh(&self.settings, false);
+            ui.ctx().request_repaint_after(Duration::from_secs(1));
+        }
         let action = match &mut self.view {
             View::Start => {
                 let live = self.live_view(ui.ctx(), renderer);
-                home::start_view(ui, &mut self.settings, &mut self.devices, &self.projects, &mut self.thumbs, note.as_deref(), &live)
+                home::start_view(ui, &mut self.settings, &mut self.devices, &self.projects, &mut self.thumbs, note.as_deref(), &self.perms, &live)
             }
             View::Editor(ed) => {
                 let mut chrome = home::Chrome {
@@ -1247,6 +1262,12 @@ impl App {
         } else if was && !now {
             self.bind_hotkeys();
         }
+    }
+
+    /// Whether every permission this recording needs is on (read fresh).
+    fn perms_ready(&mut self) -> bool {
+        self.perms.refresh(&self.settings, true);
+        self.perms.list.ready()
     }
 
     /// Act on a button in the start view or the editor's title bar.
@@ -1272,6 +1293,11 @@ impl App {
             home::Action::Open(p) => push(Cmd::Open(p)),
             home::Action::RequestPermissions => {
                 std::thread::spawn(|| crate::capture::tcc::request_all(true, false, false, Duration::from_secs(60)));
+            }
+            home::Action::Permission(kind) => permissions::grant(kind),
+            home::Action::Permissions(open) => {
+                self.perms.open = open;
+                self.perms.refresh(&self.settings, true);
             }
             home::Action::ResizeWindow { id, width, height } => {
                 let note = match crate::capture::winsize::resize(id, width as f64, height as f64) {

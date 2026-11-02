@@ -30,6 +30,9 @@ pub struct Shot<'a> {
     /// Start view: show a live preview, of the main display ("display") or
     /// of Glide's synthetic demo screen ("synthetic").
     pub live: Option<String>,
+    /// Start view: the permissions checklist as it looks with everything
+    /// "granted", or with some "missing".
+    pub permissions: Option<String>,
 }
 
 pub fn render(shot: &Shot, out_file: &Path) -> Result<()> {
@@ -170,7 +173,16 @@ pub fn render(shot: &Shot, out_file: &Path) -> Result<()> {
                     ed.ui(ui, &mut renderer, &mut chrome);
                 }
                 None => {
-                    home::start_view(ui, &mut settings, &mut devices, &projects, &mut thumbs, None, &live);
+                    use crate::capture::tcc::Status::*;
+                    let status = match shot.permissions.as_deref() {
+                        Some("missing") => [Denied, NotDetermined, Denied, Denied, Granted],
+                        _ => [Granted; 5],
+                    };
+                    if shot.permissions.as_deref() == Some("missing") {
+                        settings.mic = true;
+                    }
+                    let perms = super::permissions::State::fixed(super::permissions::Checklist::new(status, &settings));
+                    home::start_view(ui, &mut settings, &mut devices, &projects, &mut thumbs, None, &perms, &live);
                 }
             }
             // The popover itself (a menu only opens from a click).

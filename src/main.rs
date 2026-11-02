@@ -161,6 +161,9 @@ enum Cmd {
         /// Start view: show a live preview (display or synthetic).
         #[arg(long, value_parser = ["display", "synthetic"])]
         live: Option<String>,
+        /// Start view: show the permissions checklist (all granted, or some missing).
+        #[arg(long, value_parser = ["ready", "missing"])]
+        permissions: Option<String>,
         #[arg(short, long)]
         output: PathBuf,
     },
@@ -287,7 +290,7 @@ fn main() -> Result<()> {
             println!("{}", output.display());
             Ok(())
         }
-        Some(Cmd::Snapshot { project, tab, select, export_sheet, fresh, light, at, window, recents, live, output }) => {
+        Some(Cmd::Snapshot { project, tab, select, export_sheet, fresh, light, at, window, recents, live, permissions, output }) => {
             use glide::app::editor::Tab;
             let tab = tab.map(|t| {
                 Tab::ALL.iter().find(|(_, n)| n.eq_ignore_ascii_case(&t)).map(|(t, _)| *t).expect("unknown tab")
@@ -304,6 +307,7 @@ fn main() -> Result<()> {
                 window,
                 recents,
                 live,
+                permissions,
             };
             glide::app::snapshot::render(&shot, &output)?;
             println!("{}", output.display());

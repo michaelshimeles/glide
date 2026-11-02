@@ -402,6 +402,10 @@ pub enum Action {
     HotkeysChanged,
     Open(PathBuf),
     RequestPermissions,
+    /// Ask for one permission on the start page's checklist.
+    Permission(super::permissions::Kind),
+    /// Show or hide the permissions checklist.
+    Permissions(bool),
     /// Close the open recording (back to recording setup).
     Back,
     ResizeWindow { id: u32, width: u32, height: u32 },
@@ -1005,6 +1009,7 @@ pub fn start_view(
     projects: &[ProjectEntry],
     thumbs: &mut Thumbs,
     permission_note: Option<&str>,
+    perms: &super::permissions::State,
     live: &LiveView,
 ) -> Action {
     let mut chrome = Chrome { settings: s, devices: dev, projects, thumbs, action: Action::None };
@@ -1017,9 +1022,16 @@ pub fn start_view(
             ui.horizontal_centered(|ui| {
                 chrome.title_left(ui, "New recording", None);
                 ui.add_space(4.0);
-                if live.screen.is_some() {
+                if live.screen.is_some() && !perms.open {
                     pill(ui, "PREVIEW", p.control, p.secondary);
                 }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let missing = perms.list.missing().count();
+                    let label = if missing > 0 { format!("{missing} permission{} needed", if missing == 1 { "" } else { "s" }) } else { "Permissions".to_string() };
+                    if ui.small_button(label).on_hover_text("Check what macOS lets Glide do").clicked() {
+                        chrome.set(Action::Permissions(!perms.open));
+                    }
+                });
             });
             let rect = ui.max_rect();
             ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, Stroke::new(1.0, p.separator));
@@ -1096,6 +1108,15 @@ pub fn start_view(
             let area = ui.available_rect_before_wrap();
             let backdrop = if ui.visuals().dark_mode { Color32::from_rgb(0x1c, 0x1c, 0x1e) } else { Color32::from_rgb(0xe4, 0xe4, 0xe7) };
             ui.painter().rect_filled(area, CornerRadius::same(8), backdrop);
+            if perms.open {
+                if let Some(ev) = super::permissions::card(ui, &perms.list) {
+                    chrome.set(match ev {
+                        super::permissions::Event::Grant(k) => Action::Permission(k),
+                        super::permissions::Event::Close => Action::Permissions(false),
+                    });
+                }
+                return;
+            }
             // The source, live, as large as the canvas allows: frames come
             // scaled to the canvas's pixels and are drawn 1:1, pixel-aligned.
             let ppp = ui.ctx().pixels_per_point();
