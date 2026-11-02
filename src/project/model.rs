@@ -782,6 +782,11 @@ impl ExportSettings {
     pub const MP4_HEIGHTS: [u32; 5] = [Self::NATIVE, 2160, 1440, 1080, 720];
     pub const GIF_HEIGHTS: [u32; 3] = [480, 720, 1080];
 
+    /// What TikTok and Reels take: 1080p (1080×1920 at 9:16), 30 fps, H.264, social quality.
+    pub fn tiktok() -> Self {
+        ExportSettings { height: 1080, fps: 30, quality: Quality::Social, ..Default::default() }
+    }
+
     pub fn gif_default() -> Self {
         ExportSettings { format: ExportFormat::Gif, height: 480, fps: 15, quality: Quality::Studio, ..Default::default() }
     }
@@ -876,6 +881,17 @@ mod tests {
         let s = serde_json::to_string(&p).unwrap();
         let q: Project = serde_json::from_str(&s).unwrap();
         assert_eq!(p, q);
+    }
+
+    #[test]
+    fn tiktok_preset_is_1080_by_1920_at_30_fps() {
+        use crate::engine::{geom::v2, sizes::Sizes};
+        let mut style = Style::default();
+        style.aspect = Aspect::Ratio { w: 9, h: 16 };
+        let s = ExportSettings::tiktok();
+        assert_eq!(Sizes::new(&style, v2(2560.0, 1440.0)).render_size(s.height), (1080, 1920));
+        assert_eq!((s.fps, s.format, s.codec, s.target_mb), (30, ExportFormat::Mp4, Codec::H264, None));
+        assert!(ExportSettings::MP4_HEIGHTS.contains(&s.height));
     }
 
     #[test]

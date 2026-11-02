@@ -977,8 +977,16 @@ impl Editor {
             .open(&mut open)
             .show(ctx, |ui| {
                 let mut s = self.project.export;
+                let mut vertical = false;
                 let running = self.export.running.is_some();
                 ui.add_enabled_ui(!running, |ui| {
+                    widgets::row(ui, "Preset", |ui| {
+                        let tip = "MP4, 1080×1920 at 9:16, 30 fps, H.264. Also sets the aspect ratio to 9:16.";
+                        if ui.button("TikTok / Reels").on_hover_text(tip).clicked() {
+                            s = ExportSettings::tiktok();
+                            vertical = true;
+                        }
+                    });
                     widgets::row(ui, "Format", |ui| {
                         let before = s.format;
                         widgets::segmented(ui, &mut s.format, &[(ExportFormat::Gif, "GIF"), (ExportFormat::Mp4, "MP4")]);
@@ -1041,9 +1049,12 @@ impl Editor {
                         widgets::caption(ui, &format!("This Mac's video encoder can't take {rw}×{rh}, so it exports at {w}×{h}"));
                     }
                 });
-                if s != self.project.export {
+                if s != self.project.export || vertical {
                     let mut d = self.project.clone();
                     d.export = s;
+                    if vertical {
+                        d.style.aspect = crate::project::model::Aspect::Ratio { w: 9, h: 16 };
+                    }
                     self.commit(d);
                 }
                 ui.add_space(8.0);
@@ -1104,8 +1115,7 @@ impl Editor {
 fn res_label(h: u32) -> String {
     match h {
         ExportSettings::NATIVE => "Native".into(),
-        2160 => "4K".into(),
-        1440 => "1440p (2K)".into(),
+        2160 => "4K".into(),        1440 => "1440p (2K)".into(),
         _ => format!("{h}p"),
     }
 }
