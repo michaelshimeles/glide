@@ -147,7 +147,8 @@ fn editor_and_home_render_every_panel() {
         for _ in 0..2 {
             t += 0.016;
             frame(&ctx, t, |ui| {
-                let a = home::start_view(ui, &mut settings, &mut devices, &projects, &mut thumbs, Some("permission note"), &live);
+                let perms = glide::app::permissions::State::fixed(glide::app::permissions::Checklist::new([glide::capture::tcc::Status::Granted; 5], &settings));
+                let a = home::start_view(ui, &mut settings, &mut devices, &projects, &mut thumbs, Some("permission note"), &perms, &live);
                 assert!(matches!(a, home::Action::None));
             });
         }
