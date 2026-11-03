@@ -22,7 +22,6 @@ pub struct Shot<'a> {
     pub fresh: bool,
     /// Draw the Reels / TikTok guide over the preview.
     pub reel_guide: bool,
-    pub dark: bool,
     pub playhead_ms: f64,
     pub size: (f32, f32),
     /// Home: show the Window source with the first window chosen.
@@ -42,7 +41,7 @@ pub fn render(shot: &Shot, out_file: &Path) -> Result<()> {
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = egui_wgpu::Renderer::new(&gpu.device, format, egui_wgpu::RendererOptions::default());
     let ctx = egui::Context::default();
-    ctx.set_theme(if shot.dark { egui::Theme::Dark } else { egui::Theme::Light });
+    ctx.set_theme(egui::Theme::Dark);
     theme::apply(&ctx);
     let ppp = 2.0f32;
     let (w, h) = shot.size;
@@ -146,7 +145,7 @@ pub fn render(shot: &Shot, out_file: &Path) -> Result<()> {
         let mut input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))),
             time: Some(i as f64 * 0.1),
-            system_theme: Some(if shot.dark { egui::Theme::Dark } else { egui::Theme::Light }),
+            system_theme: Some(egui::Theme::Dark),
             ..Default::default()
         };
         input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(ppp);
@@ -225,7 +224,7 @@ pub fn render(shot: &Shot, out_file: &Path) -> Result<()> {
     let extra = renderer.update_buffers(&gpu.device, &gpu.queue, &mut enc, &prims, &sd);
     gpu.queue.submit(extra);
     {
-        let bg = theme::palette(shot.dark).window;
+        let bg = theme::palette().window;
         let [r, g, b, _] = bg.to_normalized_gamma_f32();
         let mut pass = enc
             .begin_render_pass(&wgpu::RenderPassDescriptor {

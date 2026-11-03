@@ -2,7 +2,7 @@
 //! layout track.
 //! Everything is drawn in playback time; edits are stored in source time.
 
-use egui::{Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Color32, CornerRadius, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 
 use super::editor::{Editor, Selection};
 use super::theme::{self, pal};
@@ -51,10 +51,14 @@ enum Part {
 }
 
 fn zoom_color() -> Color32 {
-    Color32::from_rgb(0x8b, 0x5c, 0xf6)
+    theme::VIOLET
 }
 fn clip_color() -> Color32 {
-    Color32::from_rgb(0xf5, 0x9e, 0x0b)
+    Color32::from_rgb(0xc6, 0x82, 0x0e)
+}
+/// The zoom track's background, a deep indigo.
+fn zoom_track_bg() -> Color32 {
+    Color32::from_rgb(0x11, 0x10, 0x25)
 }
 fn layout_color() -> Color32 {
     Color32::from_rgb(0x10, 0xb9, 0x81)
@@ -117,10 +121,9 @@ pub fn empty(ui: &mut Ui) {
     let width = ui.available_width() - 4.0;
     let (rect, _) = ui.allocate_exact_size(vec2(width, RULER_H + 3.0 * (TRACK_H + GAP) + 4.0), Sense::hover());
     let painter = ui.painter_at(rect);
-    let track_bg = if ui.visuals().dark_mode { Color32::from_white_alpha(8) } else { Color32::from_black_alpha(8) };
     for (i, name) in ["Clips", "Zoom", "Masks"].into_iter().enumerate() {
         let r = Rect::from_min_size(pos2(rect.left(), rect.top() + RULER_H + 2.0 + i as f32 * (TRACK_H + GAP)), vec2(width, TRACK_H));
-        painter.rect_filled(r, CornerRadius::same(6), track_bg);
+        painter.rect_filled(r, CornerRadius::same(10), if i == 1 { zoom_track_bg() } else { Color32::from_white_alpha(8) });
         painter.text(r.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, name, egui::FontId::proportional(10.0), p.tertiary);
         if i == 0 {
             painter.text(r.center(), egui::Align2::CENTER_CENTER, "Your recording opens here when you stop", egui::FontId::proportional(12.0), p.secondary);
@@ -153,7 +156,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
         while t * 1000.0 <= dur {
             let x = x_of(t * 1000.0);
             painter.line_segment([pos2(x, ruler.bottom() - 5.0), pos2(x, ruler.bottom())], Stroke::new(1.0, p.tertiary));
-            painter.text(pos2(x + 3.0, ruler.top() + 1.0), egui::Align2::LEFT_TOP, super::widgets::fmt_time(t * 1000.0), egui::FontId::proportional(10.0), p.secondary);
+            painter.text(pos2(x + 3.0, ruler.top() + 1.0), egui::Align2::LEFT_TOP, super::widgets::fmt_time(t * 1000.0), egui::FontId::proportional(10.0), p.tertiary);
             t += step_s;
         }
 
@@ -165,9 +168,8 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
         let zoom_row = track(1);
         let mask_row = track(2);
         let layout_row = track(3);
-        let track_bg = if ui.visuals().dark_mode { Color32::from_white_alpha(8) } else { Color32::from_black_alpha(8) };
         for r in [clip_row, zoom_row, mask_row].into_iter().chain(has_cam.then_some(layout_row)) {
-            painter.rect_filled(r, CornerRadius::same(6), track_bg);
+            painter.rect_filled(r, CornerRadius::same(10), if r == zoom_row { zoom_track_bg() } else { Color32::from_white_alpha(8) });
         }
 
         let pointer = ui.input(|i| i.pointer.interact_pos());
@@ -181,7 +183,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             let id = slice.map_or(0, |s| s.id);
             let selected = ed.selection == Selection::Slice(id);
             let c = clip_color();
-            painter.rect_filled(r, CornerRadius::same(6), c.gamma_multiply(if selected { 0.95 } else { 0.7 }));
+            painter.rect_filled(r, CornerRadius::same(10), c.gamma_multiply(if selected { 1.0 } else { 0.92 }));
             if selected {
                 painter.rect_stroke(r, CornerRadius::same(6), Stroke::new(2.0, Color32::WHITE), egui::StrokeKind::Inside);
             }
@@ -534,12 +536,10 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             }
         }
         let x = x_of(ed.playhead);
-        painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(2.0, theme::accent()));
-        painter.add(egui::Shape::convex_polygon(
-            vec![Pos2::new(x - 6.0, rect.top()), Pos2::new(x + 6.0, rect.top()), Pos2::new(x, rect.top() + 8.0)],
-            theme::accent(),
-            Stroke::NONE,
-        ));
+        // A thin line with a round handle, in the same blue-grey as the reference.
+        let (line, handle) = (Color32::from_rgb(0x3c, 0x40, 0x50), Color32::from_rgb(0x29, 0x2c, 0x38));
+        painter.line_segment([pos2(x, rect.top() + 6.0), pos2(x, rect.bottom())], Stroke::new(2.0, line));
+        painter.circle(pos2(x, rect.top() + 6.0), 6.0, handle, Stroke::new(1.0, line));
         if ed.is_playing() {
             ui.scroll_to_rect(Rect::from_center_size(pos2(x, rect.center().y), vec2(200.0, 10.0)), None);
         }
