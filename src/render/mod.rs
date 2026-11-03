@@ -473,9 +473,12 @@ impl Renderer {
 
     fn text_tex(&mut self, t: &TextLayer) -> Option<(u64, (u32, u32))> {
         let px = t.size.round().max(4.0) as u32;
-        let key = text::key(&t.text, px, t.badge);
+        let key = text::key(&t.text, px, t.badge, t.pop.map(|p| (p.active, p.highlight.0)));
         if !self.textures.contains_key(&TexId::Text(key)) {
-            let img = self.text.render(&t.text, px as f32, t.badge)?;
+            let img = match t.pop {
+                Some(p) => self.text.render_pop(&t.text, px as f32, p.active, p.highlight.to_f32())?,
+                None => self.text.render(&t.text, px as f32, t.badge)?,
+            };
             self.upload(TexId::Text(key), &img, false);
         }
         self.text_used.push(key);
@@ -656,7 +659,7 @@ impl Renderer {
         self.text_used.clear();
         for t in &frame.texts {
             if let Some((key, (tw, th))) = self.text_tex(t) {
-                let (tw, th) = (tw as f64, th as f64);
+                let (tw, th) = (tw as f64 * t.scale, th as f64 * t.scale);
                 let rect = Rect::new(t.center.x - tw / 2.0, t.center.y - th / 2.0, tw, th);
                 let mut d = Draw::new(MODE_TEXTURE, rect, size);
                 d.p0[3] = t.alpha as f32;

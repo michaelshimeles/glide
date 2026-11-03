@@ -77,6 +77,35 @@ pub fn line_at(lines: &[Line], t: f64) -> Option<&Line> {
     lines.iter().find(|l| t >= l.start && t <= l.end)
 }
 
+/// The words of `line` to show at time `t` when captions carry `per` words at
+/// a time (0 = the whole line), and the index of the spoken word among them.
+/// The first group starts with the line and the last ends with it, so the
+/// caption stays up through the pauses between words.
+pub fn focus(line: &Line, t: f64, per: usize) -> (Line, usize) {
+    let spoken = line.words.iter().rposition(|w| w.start <= t).unwrap_or(0);
+    if per == 0 || per >= line.words.len() {
+        return (line.clone(), spoken);
+    }
+    let from = spoken / per * per;
+    let to = (from + per).min(line.words.len());
+    let words = line.words[from..to].to_vec();
+    let start = if from == 0 { line.start } else { words[0].start };
+    let end = if to == line.words.len() { line.end } else { words[words.len() - 1].end };
+    (Line { start, end, words }, spoken - from)
+}
+
+/// How long a caption takes to pop in.
+const POP_MS: f64 = 160.0;
+
+/// Size of a caption `since` ms after it appeared: it grows from 75% and
+/// overshoots a little before settling at 100%.
+pub fn pop_scale(since: f64) -> f64 {
+    const C1: f64 = 1.70158;
+    let x = (since / POP_MS).clamp(0.0, 1.0) - 1.0;
+    let eased = 1.0 + (C1 + 1.0) * x.powi(3) + C1 * x.powi(2);
+    0.75 + 0.25 * eased
+}
+
 #[cfg(test)]
 mod edit_tests {
     use super::*;
@@ -118,5 +147,31 @@ mod tests {
         assert_eq!(ls[0].text(), "Hello world");
         assert!(line_at(&ls, 300.0).is_some());
         assert!(line_at(&ls, 1500.0).is_none());
+    }
+
+    #[test]
+    fn focus_shows_a_few_words_and_marks_the_spoken_one() {
+        let words: Vec<_> = (0..5).map(|i| w(i as f64 * 300.0, i as f64 * 300.0 + 250.0, &format!("w{i}"))).collect();
+        let line = &lines(&words)[0];
+        // Words w0 w1 w2, then w3 w4.
+        let (shown, active) = focus(line, 650.0, 3);
+        assert_eq!((shown.text().as_str(), active), ("w0 w1 w2", 2));
+        assert_eq!(shown.start, line.start);
+        // In the gap after w2 the group stays up.
+        assert_eq!(focus(line, 880.0, 3).0.text(), "w0 w1 w2");
+        let (shown, active) = focus(line, 1300.0, 3);
+        assert_eq!((shown.text().as_str(), active), ("w3 w4", 1));
+        assert_eq!((shown.start, shown.end), (900.0, line.end));
+        // 0 words per line, or more than the line has, keeps the whole line.
+        assert_eq!(focus(line, 650.0, 0).0.text(), "w0 w1 w2 w3 w4");
+        assert_eq!(focus(line, 650.0, 9).1, 2);
+    }
+
+    #[test]
+    fn pop_grows_from_three_quarters_and_settles() {
+        assert!((pop_scale(0.0) - 0.75).abs() < 1e-9);
+        assert!((pop_scale(POP_MS) - 1.0).abs() < 1e-9);
+        assert!((pop_scale(5000.0) - 1.0).abs() < 1e-9);
+        assert!(pop_scale(POP_MS * 0.6) > 1.0, "overshoots on the way");
     }
 }

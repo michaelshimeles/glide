@@ -337,16 +337,43 @@ impl Default for ShortcutStyle {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptionLook {
+    /// White text on a dark box at the bottom.
+    #[default]
+    Box,
+    /// Big outlined text a few words at a time, with the spoken word
+    /// highlighted, like TikTok and Reels captions.
+    Pop,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CaptionStyle {
     pub show: bool,
     pub size: f64,
+    pub look: CaptionLook,
+    /// Colour of the spoken word (Pop only).
+    pub highlight: Color,
+    /// Words on screen at once, 0 for the whole line (Pop only).
+    pub words_per_line: u32,
+    pub uppercase: bool,
+    /// Where the caption's centre sits, as a fraction of the height (Pop only).
+    pub position: f64,
 }
 
 impl Default for CaptionStyle {
     fn default() -> Self {
-        CaptionStyle { show: true, size: 1.0 }
+        CaptionStyle {
+            show: true,
+            size: 1.0,
+            look: CaptionLook::Box,
+            highlight: Color::rgb(255, 214, 10),
+            words_per_line: 3,
+            uppercase: true,
+            position: 0.7,
+        }
     }
 }
 
