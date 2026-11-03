@@ -957,7 +957,7 @@ impl Editor {
             if ui.selectable_label(self.looping, "Loop").on_hover_text("Loop playback (L)").clicked() {
                 self.looping = !self.looping;
             }
-            if ui.selectable_label(self.reel_guide, "Reels").on_hover_text("Show the 9:16 feed and the area Reels and TikTok leave free (G)").clicked() {
+            if ui.selectable_label(self.reel_guide, "Reel mode").on_hover_text("Preview the video inside a TikTok or Reels feed, with the app's own buttons and text (G)").clicked() {
                 self.reel_guide = !self.reel_guide;
             }
             ui.separator();
