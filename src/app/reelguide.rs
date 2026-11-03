@@ -75,11 +75,12 @@ fn spots(feed: Rect) -> Spots {
     }
 }
 
-/// Draw the guide over `preview`: everything the feed crops is dimmed and the
-/// interface is drawn over the feed.
+/// Draw the guide over `preview`: everything the feed crops is black, so
+/// what's left is exactly what a viewer sees, and the interface is drawn
+/// over the feed.
 pub fn paint(painter: &Painter, preview: Rect) {
     let feed = feed(preview);
-    let dim = Color32::from_black_alpha(150);
+    let crop = Color32::BLACK;
     for r in [
         Rect::from_min_max(preview.min, pos2(feed.left(), preview.bottom())),
         Rect::from_min_max(pos2(feed.right(), preview.top()), preview.max),
@@ -87,10 +88,9 @@ pub fn paint(painter: &Painter, preview: Rect) {
         Rect::from_min_max(pos2(feed.left(), feed.bottom()), pos2(feed.right(), preview.bottom())),
     ] {
         if r.is_positive() {
-            painter.rect_filled(r.intersect(preview), CornerRadius::ZERO, dim);
+            painter.rect_filled(r.intersect(preview), CornerRadius::ZERO, crop);
         }
     }
-    painter.rect_stroke(feed.intersect(preview), CornerRadius::ZERO, Stroke::new(1.0, Color32::from_white_alpha(120)), StrokeKind::Inside);
     paint_interface(&painter.with_clip_rect(feed.intersect(preview)), feed);
 }
 
