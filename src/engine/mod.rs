@@ -10,6 +10,7 @@ pub mod events;
 pub mod geom;
 pub mod keys;
 pub mod scene;
+pub mod silence;
 pub mod sizes;
 pub mod spring;
 pub mod timemap;
