@@ -473,11 +473,36 @@ fn mp4_readback(
 
 /// Default output path next to the package.
 pub fn default_output(package: &Path, settings: &ExportSettings) -> PathBuf {
+    output_path(None, package, settings)
+}
+
+/// Output path for an export: in `dir` when one is chosen, else next to the
+/// package. The file is named after the package.
+pub fn output_path(dir: Option<&Path>, package: &Path, settings: &ExportSettings) -> PathBuf {
     let ext = match (settings.format, settings.codec) {
         (ExportFormat::Gif, _) => "gif",
         (_, crate::project::model::Codec::Prores) => "mov",
         _ => "mp4",
     };
     let name = package.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "export".into());
-    package.with_file_name(format!("{name}.{ext}"))
+    match dir {
+        Some(dir) => dir.join(format!("{name}.{ext}")),
+        None => package.with_file_name(format!("{name}.{ext}")),
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn the_output_goes_in_the_chosen_folder_or_next_to_the_package() {
+        let package = Path::new("/Users/me/Movies/Glide/Demo.glide");
+        let mp4 = ExportSettings::default();
+        assert_eq!(output_path(None, package, &mp4), Path::new("/Users/me/Movies/Glide/Demo.mp4"));
+        assert_eq!(output_path(Some(Path::new("/Users/me/Desktop")), package, &mp4), Path::new("/Users/me/Desktop/Demo.mp4"));
+        let gif = ExportSettings::gif_default();
+        assert_eq!(output_path(Some(Path::new("/tmp/out")), package, &gif), Path::new("/tmp/out/Demo.gif"));
+        assert_eq!(default_output(package, &gif), Path::new("/Users/me/Movies/Glide/Demo.gif"));
+    }
 }

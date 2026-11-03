@@ -56,6 +56,8 @@ pub struct Settings {
     pub ios_device: Option<String>,
     /// Window sizes (points) saved from the Resize menu.
     pub window_sizes: Vec<(u32, u32)>,
+    /// Folder exports are saved in; None puts them next to the recording.
+    pub export_dir: Option<PathBuf>,
 }
 
 /// Global shortcuts (None = unbound).
@@ -108,6 +110,7 @@ impl Default for Settings {
             hotkeys: Hotkeys::default(),
             ios_device: None,
             window_sizes: vec![],
+            export_dir: None,
         }
     }
 }
