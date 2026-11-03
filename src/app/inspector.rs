@@ -642,6 +642,52 @@ fn animation(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
             }
         });
     });
+    section(ui, "Pauses", |ui| {
+        if ed.rec.meta.mic.is_none() && ed.rec.meta.system_audio.is_none() {
+            caption(ui, "No audio was recorded.");
+            return;
+        }
+        caption(ui, "Cut the quiet parts where nobody is talking and nothing is playing. Pauses at least:");
+        ui.horizontal(|ui| {
+            for (label, secs) in [("0.5 s", 0.5), ("1 s", 1.0), ("2 s", 2.0)] {
+                if ui.button(label).clicked() {
+                    ed.status = Some(match cut_pauses(ed, d, secs * 1000.0) {
+                        Ok((0, _)) => format!("No pauses of {label} or more found"),
+                        Ok((n, cut)) => format!("Cut {n} pause{} ({cut:.1} s)", if n == 1 { "" } else { "s" }),
+                        Err(e) => e.into(),
+                    });
+                }
+            }
+        });
+    });
+}
+
+/// Cut the pauses of at least `min_ms` out of `d`'s edit, judged from the
+/// microphone and system audio that aren't muted. Returns how many were cut
+/// and how many seconds that removed. Reads the audio on the spot.
+fn cut_pauses(ed: &Editor, d: &mut Project, min_ms: f64) -> Result<(usize, f64), &'static str> {
+    /// Kept on each side of a cut so words aren't clipped.
+    const KEEP_MS: f64 = 150.0;
+    let audio = &d.style.audio;
+    let tracks = [(&ed.rec.meta.mic, audio.mute_mic), (&ed.rec.meta.system_audio, audio.mute_system)];
+    let levels: Vec<Vec<f32>> = tracks
+        .into_iter()
+        .filter_map(|(t, muted)| t.as_ref().filter(|_| !muted))
+        .filter_map(|t| crate::media::read_audio(&ed.package.root.join("recording").join(&t.file), t.track).ok())
+        .map(|samples| crate::engine::silence::levels(&samples, crate::capture::mixer::RATE))
+        .collect();
+    if levels.is_empty() {
+        return Err("There's no unmuted audio to find pauses in");
+    }
+    let duration = ed.rec.meta.duration_ms;
+    let (mut count, mut cut_ms) = (0, 0.0);
+    for (s, e) in crate::engine::silence::pauses(&crate::engine::silence::loudest(&levels), min_ms, KEEP_MS) {
+        if crate::engine::typing::cut(&mut d.timeline, duration, s, e) {
+            count += 1;
+            cut_ms += e - s;
+        }
+    }
+    Ok((count, cut_ms / 1000.0))
 }
 
 fn zoom_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
