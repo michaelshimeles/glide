@@ -52,6 +52,22 @@ pub fn split_at(tl: &mut Timeline, t: f64) -> bool {
     true
 }
 
+/// Drop the part of the slice around source time `t` before it (`keep_after`)
+/// or after it. `t` must be at least 100 ms inside the slice, as for
+/// `split_at`. `duration` is the recording length, used when the edit has no
+/// slices yet. Returns whether anything was trimmed.
+pub fn trim_at(tl: &mut Timeline, duration: f64, t: f64, keep_after: bool) -> bool {
+    let (start, end) = match tl.slices.iter().find(|s| t >= s.start && t < s.end) {
+        Some(s) => (s.start, s.end),
+        None if tl.slices.is_empty() => (0.0, duration),
+        None => return false,
+    };
+    if t <= start + 100.0 || t >= end - 100.0 {
+        return false;
+    }
+    if keep_after { cut(tl, duration, start, t) } else { cut(tl, duration, t, end) }
+}
+
 /// Play the given source ranges at `speed`: split at their edges and set the
 /// speed of every slice inside. Returns how many slices changed.
 pub fn speed_up(tl: &mut Timeline, ranges: &[(f64, f64)], speed: f64) -> usize {
@@ -140,6 +156,21 @@ mod tests {
         assert_eq!(n, 1);
         let spans: Vec<_> = tl.slices.iter().map(|s| (s.start, s.end, s.speed)).collect();
         assert_eq!(spans, vec![(0.0, 2000.0, 1.0), (2000.0, 5000.0, 3.0), (5000.0, 10_000.0, 1.0)]);
+    }
+
+    #[test]
+    fn trim_at_drops_one_side_of_the_slice() {
+        let mut tl = Timeline::default();
+        assert!(trim_at(&mut tl, 10_000.0, 3000.0, true));
+        let spans: Vec<_> = tl.slices.iter().map(|s| (s.start, s.end)).collect();
+        assert_eq!(spans, vec![(3000.0, 10_000.0)]);
+        assert!(trim_at(&mut tl, 10_000.0, 8000.0, false));
+        let spans: Vec<_> = tl.slices.iter().map(|s| (s.start, s.end)).collect();
+        assert_eq!(spans, vec![(3000.0, 8000.0)]);
+        // Too close to an edge, or outside every slice: nothing changes.
+        assert!(!trim_at(&mut tl, 10_000.0, 3050.0, true));
+        assert!(!trim_at(&mut tl, 10_000.0, 1000.0, true));
+        assert_eq!(tl.slices.len(), 1);
     }
 
     #[test]
