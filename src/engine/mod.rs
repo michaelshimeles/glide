@@ -2,6 +2,7 @@
 //! recording and time. Fully unit-tested and independent of the GPU.
 
 pub mod animator;
+pub mod beats;
 pub mod camera;
 pub mod captions;
 pub mod cursor;

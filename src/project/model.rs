@@ -643,6 +643,47 @@ impl Default for Mask {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EffectKind {
+    /// The picture jolts on every hit in the audio.
+    #[default]
+    Shake,
+    /// The picture swells a little on every hit in the audio.
+    Pulse,
+}
+
+impl EffectKind {
+    pub const ALL: [(EffectKind, &'static str); 2] = [(EffectKind::Shake, "Shake"), (EffectKind::Pulse, "Pulse")];
+}
+
+/// An effect on the screen that follows the beat of the audio, over a time
+/// range (source ms).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Effect {
+    pub id: u64,
+    pub start: f64,
+    pub end: f64,
+    pub kind: EffectKind,
+    /// How hard it hits, 0..1.
+    pub strength: f64,
+    /// How soft a hit still counts, 0..1 (more means more hits).
+    pub sensitivity: f64,
+}
+
+impl Default for Effect {
+    fn default() -> Self {
+        Effect { id: 0, start: 0.0, end: 0.0, kind: EffectKind::Shake, strength: 0.5, sensitivity: 0.5 }
+    }
+}
+
+impl Effect {
+    /// Ease in and out at the ends of the range.
+    pub const FADE_MS: f64 = 100.0;
+    pub const MIN_LEN_MS: f64 = 200.0;
+}
+
 impl Mask {
     /// Fade in/out time at the ends of the range.
     pub const FADE_MS: f64 = 150.0;
@@ -697,6 +738,7 @@ pub struct Timeline {
     pub zooms: Vec<Zoom>,
     pub layouts: Vec<LayoutRange>,
     pub masks: Vec<Mask>,
+    pub effects: Vec<Effect>,
     pub voiceovers: Vec<VoiceOver>,
     next_id: u64,
 }

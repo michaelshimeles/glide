@@ -135,6 +135,8 @@ pub struct Recording {
     pub keys: Vec<KeyEvent>,
     pub cursors: Vec<CursorImage>,
     pub transcript: Vec<Word>,
+    /// The hits in the audio that effects follow (see `project::beats`).
+    pub beats: crate::engine::beats::Beats,
 }
 
 impl Recording {

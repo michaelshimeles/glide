@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use super::animator::{Animator, Target};
+use super::beats::{self, Beats};
 use super::camera;
 use super::captions::{self, Line};
 use super::cursor::{self, ClickFx, CursorModel};
@@ -14,7 +15,7 @@ use super::sizes::Sizes;
 use super::spring::SpringConfig;
 use super::timemap::TimeMap;
 use super::zoom;
-use crate::project::model::{ClickEffect, Color, LayoutKind, MaskKind, Project, Shadow};
+use crate::project::model::{ClickEffect, Color, Effect, EffectKind, LayoutKind, MaskKind, Project, Shadow};
 use crate::project::recording::Recording;
 
 /// Directional or radial blur for a moving layer.
@@ -197,6 +198,8 @@ pub struct Scene {
     duration: f64,
     fps: f64,
     anim: Anim,
+    /// The hits in the audio that effects follow.
+    beats: Beats,
 }
 
 impl Scene {
@@ -216,6 +219,7 @@ impl Scene {
             project,
             fps,
             anim: Anim::new(fps),
+            beats: rec.beats.clone(),
         }
     }
 
@@ -275,13 +279,42 @@ impl Scene {
         })
     }
 
-    /// Window rect in output pixels for a frame, plus its zoom scale.
+    /// Window rect in output pixels for a frame, plus its zoom scale. Beat
+    /// effects move and grow the rect but leave the zoom scale alone, so the
+    /// rounded corners and shadow stay the same.
     fn window_rect(&mut self, f: i64, k: f64) -> (Rect, f64) {
         let v = self.screen_values(f);
         let body = self.sizes.default_body();
         let origin = self.sizes.origin;
         let min = origin + body.min() + v2(v[1], v[2]);
-        (Rect::from_min_size(min, body.size() * v[0]).scale_about_origin(k), v[0])
+        let rect = Rect::from_min_size(min, body.size() * v[0]).scale_about_origin(k);
+        let (shift, grow) = self.effect_motion(f as f64 * 1000.0 / self.fps, self.sizes.output.y * k);
+        let size = rect.size() * grow;
+        (Rect::from_min_size(rect.center() - size * 0.5 + shift, size), v[0])
+    }
+
+    /// How the effects active at playback time `pb` move the window: a shift
+    /// in output pixels (for a frame `height` px tall) and a scale about its
+    /// centre. Nothing when no effect is active or the audio has no hit.
+    fn effect_motion(&self, pb: f64, height: f64) -> (Vec2, f64) {
+        let (mut shift, mut scale) = (Vec2::ZERO, 1.0);
+        if self.project.timeline.effects.is_empty() || self.beats.beats.is_empty() {
+            return (shift, scale);
+        }
+        let src = self.map.to_source(pb);
+        let t = self.beats.time_at(pb, src);
+        for e in self.project.timeline.effects.iter().filter(|e| src >= e.start && src <= e.end) {
+            let Some(p) = beats::pulse(&self.beats.beats, t, beats::threshold(e.sensitivity)) else { continue };
+            let strength = e.strength * beats::edge_gain(src, e.start, e.end, Effect::FADE_MS);
+            match e.kind {
+                EffectKind::Shake => {
+                    let (dx, dy) = beats::shake_offset(p, strength, height);
+                    shift = shift + v2(dx, dy);
+                }
+                EffectKind::Pulse => scale *= beats::pulse_scale(p, strength),
+            }
+        }
+        (shift, scale)
     }
 
     /// Map an output-pixel point back to screen-video pixels given the window rect.
@@ -684,6 +717,76 @@ mod tests {
             mouse,
             ..Default::default()
         }
+    }
+
+    /// A recording whose audio has one full hit at 3 s and one at 6 s, and a
+    /// project with one effect over 2..8 s.
+    fn with_effect(kind: EffectKind) -> (Project, Recording) {
+        let mut rec = recording();
+        rec.beats = Beats {
+            beats: vec![beats::Beat { t: 3000.0, strength: 1.0 }, beats::Beat { t: 6000.0, strength: 1.0 }],
+            loop_ms: 0.0,
+        };
+        let mut p = Project::default();
+        p.timeline.effects.push(Effect { id: 1, start: 2000.0, end: 8000.0, kind, strength: 1.0, sensitivity: 0.5 });
+        (p, rec)
+    }
+
+    #[test]
+    fn a_shake_moves_the_window_on_the_hit_and_nowhere_else() {
+        let (p, rec) = with_effect(EffectKind::Shake);
+        let mut plain = Scene::new(Project { timeline: Default::default(), ..p.clone() }, &rec, 60.0);
+        let mut fx = Scene::new(p, &rec, 60.0);
+        let at = |s: &mut Scene, ms: f64| s.frame(ms, 1080.0).window.rect;
+        // On the hit it is shifted by about 1.2 % of the height, easing in from the effect's start.
+        let moved = at(&mut fx, 3000.0).center() - at(&mut plain, 3000.0).center();
+        assert!((moved.length() - 0.012 * 1080.0).abs() < 0.5, "{moved:?}");
+        assert!((at(&mut fx, 3000.0).w - at(&mut plain, 3000.0).w).abs() < 1e-9, "a shake doesn't resize");
+        // Half a second later the hit has faded, and before the effect starts nothing happens.
+        assert!((at(&mut fx, 3900.0).center() - at(&mut plain, 3900.0).center()).length() < 0.5);
+        assert_eq!(at(&mut fx, 1000.0), at(&mut plain, 1000.0));
+        // The same time gives the same frame, also in a fresh scene.
+        let (p2, rec2) = with_effect(EffectKind::Shake);
+        let mut again = Scene::new(p2, &rec2, 60.0);
+        assert_eq!(at(&mut again, 3000.0), at(&mut fx, 3000.0));
+    }
+
+    #[test]
+    fn a_pulse_grows_the_window_about_its_centre() {
+        let (p, rec) = with_effect(EffectKind::Pulse);
+        let mut plain = Scene::new(Project { timeline: Default::default(), ..p.clone() }, &rec, 60.0);
+        let mut fx = Scene::new(p, &rec, 60.0);
+        let (a, b) = (fx.frame(6000.0, 1080.0).window.rect, plain.frame(6000.0, 1080.0).window.rect);
+        assert!((a.w / b.w - 1.04).abs() < 1e-6, "{} vs {}", a.w, b.w);
+        assert!((a.center() - b.center()).length() < 1e-6);
+        let (c, d) = (fx.frame(7500.0, 1080.0).window.rect, plain.frame(7500.0, 1080.0).window.rect);
+        assert!((c.w / d.w - 1.0).abs() < 0.001, "faded after 1.5 s");
+    }
+
+    #[test]
+    fn effects_do_nothing_without_hits_or_outside_their_range() {
+        let (mut p, mut rec) = with_effect(EffectKind::Shake);
+        rec.beats = Beats::default();
+        let mut silent = Scene::new(p.clone(), &rec, 60.0);
+        let mut plain = Scene::new(Project { timeline: Default::default(), ..p.clone() }, &rec, 60.0);
+        assert_eq!(silent.frame(3000.0, 1080.0).window, plain.frame(3000.0, 1080.0).window);
+        // A hit outside every effect: the effect covers 2..8 s only.
+        rec.beats.beats = vec![beats::Beat { t: 9000.0, strength: 1.0 }];
+        p.timeline.effects[0].end = 5000.0;
+        let mut s = Scene::new(p, &rec, 60.0);
+        assert_eq!(s.frame(9000.0, 1080.0).window, plain.frame(9000.0, 1080.0).window);
+    }
+
+    #[test]
+    fn music_hits_repeat_through_the_edit() {
+        let (p, mut rec) = with_effect(EffectKind::Shake);
+        // Music 4 s long with a hit at 1 s: hits at 1 s, 5 s, 9 s of the edit.
+        rec.beats = Beats { beats: vec![beats::Beat { t: 1000.0, strength: 1.0 }], loop_ms: 4000.0 };
+        let mut fx = Scene::new(p.clone(), &rec, 60.0);
+        let mut plain = Scene::new(Project { timeline: Default::default(), ..p }, &rec, 60.0);
+        let shifted = |ms: f64, fx: &mut Scene, plain: &mut Scene| (fx.frame(ms, 1080.0).window.rect.center() - plain.frame(ms, 1080.0).window.rect.center()).length();
+        assert!(shifted(5000.0, &mut fx, &mut plain) > 4.0, "second round of the music");
+        assert!(shifted(3000.0, &mut fx, &mut plain) < 0.5, "between hits");
     }
 
     #[test]

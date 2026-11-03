@@ -116,6 +116,7 @@ pub fn recording(w: u32, h: u32, duration_ms: f64) -> Recording {
         keys,
         cursors: vec![CursorImage { id: 0, file: None, hotspot: (0.0, 0.0), size: (17.0, 23.0), system: Some("arrow".into()) }],
         transcript,
+        beats: Default::default(),
     }
 }
 
