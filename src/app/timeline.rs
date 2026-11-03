@@ -1,12 +1,13 @@
-//! Timeline: ruler, clip track (slices), zoom track, mask track and camera
-//! layout track.
+//! Timeline: ruler, clip track (slices), zoom track, mask track, effect track
+//! and camera layout track.
 //! Everything is drawn in playback time; edits are stored in source time.
 
 use egui::{Color32, CornerRadius, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
 
 use super::editor::{Editor, Selection};
 use super::theme::{self, pal};
-use crate::project::model::{LayoutKind, Mask, MaskKind, Zoom, ZoomMode};
+use crate::engine::beats;
+use crate::project::model::{Effect, EffectKind, LayoutKind, Mask, MaskKind, Zoom, ZoomMode};
 
 const RULER_H: f32 = 18.0;
 const TRACK_H: f32 = 40.0;
@@ -40,6 +41,10 @@ enum Drag {
     Zoom { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
     Layout { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
     Mask { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
+    Effect { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
+    /// An effect being painted: it starts at `start` and its end follows the
+    /// playhead while the video plays, else the pointer.
+    NewEffect { id: u64, start: f64 },
     Playhead,
 }
 
@@ -66,6 +71,9 @@ fn layout_color() -> Color32 {
 fn mask_color() -> Color32 {
     Color32::from_rgb(0xec, 0x48, 0x99)
 }
+fn effect_color() -> Color32 {
+    Color32::from_rgb(0xf9, 0x73, 0x60)
+}
 
 /// `v.clamp(lo, hi)`, or `keep` when the range is empty (an item already
 /// shorter than the minimum length can't be resized further; `clamp` would
@@ -82,6 +90,13 @@ fn clamp_or(v: f64, lo: f64, hi: f64, keep: f64) -> f64 {
 fn edge_after_drag(orig: f64, dx_px: f32, px_per_ms: f64, speed: f64) -> f64 {
     let speed = if speed > 0.0 { speed } else { 1.0 };
     orig + dx_px as f64 / px_per_ms * speed
+}
+
+/// Where an effect that is being painted from `start` ends when the playhead
+/// or pointer is at `now` (source ms) in a recording `duration` long: never
+/// shorter than the minimum, never past the end, and never before `start`.
+fn painted_end(start: f64, now: f64, duration: f64) -> f64 {
+    now.max(start + Effect::MIN_LEN_MS).min(duration).max(start)
 }
 
 /// Greedy lane assignment so overlapping ranges don't cover each other.
@@ -119,9 +134,9 @@ pub fn empty(ui: &mut Ui) {
     });
     ui.add_space(4.0);
     let width = ui.available_width() - 4.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(width, RULER_H + 3.0 * (TRACK_H + GAP) + 4.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(width, RULER_H + 4.0 * (TRACK_H + GAP) + 4.0), Sense::hover());
     let painter = ui.painter_at(rect);
-    for (i, name) in ["Clips", "Zoom", "Masks"].into_iter().enumerate() {
+    for (i, name) in ["Clips", "Zoom", "Masks", "Effects"].into_iter().enumerate() {
         let r = Rect::from_min_size(pos2(rect.left(), rect.top() + RULER_H + 2.0 + i as f32 * (TRACK_H + GAP)), vec2(width, TRACK_H));
         painter.rect_filled(r, CornerRadius::same(10), if i == 1 { zoom_track_bg() } else { Color32::from_white_alpha(8) });
         painter.text(r.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, name, egui::FontId::proportional(10.0), p.tertiary);
@@ -134,7 +149,7 @@ pub fn empty(ui: &mut Ui) {
 pub fn ui(ui: &mut Ui, ed: &mut Editor) {
     let p = pal(ui);
     let has_cam = ed.rec.meta.camera.is_some();
-    let tracks = if has_cam { 4 } else { 3 };
+    let tracks = if has_cam { 5 } else { 4 };
     let warns = warnings(ed);
     let extra = if warns.is_empty() { 0.0 } else { WARN_H + GAP };
     let height = RULER_H + tracks as f32 * (TRACK_H + GAP) + 4.0 + extra;
@@ -167,8 +182,9 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
         let clip_row = track(0);
         let zoom_row = track(1);
         let mask_row = track(2);
-        let layout_row = track(3);
-        for r in [clip_row, zoom_row, mask_row].into_iter().chain(has_cam.then_some(layout_row)) {
+        let effect_row = track(3);
+        let layout_row = track(4);
+        for r in [clip_row, zoom_row, mask_row, effect_row].into_iter().chain(has_cam.then_some(layout_row)) {
             painter.rect_filled(r, CornerRadius::same(10), if r == zoom_row { zoom_track_bg() } else { Color32::from_white_alpha(8) });
         }
 
@@ -290,9 +306,9 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
 
         // Mask track: overlapping masks stack in lanes.
         let masks = ed.project.timeline.masks.clone();
-        let lanes = lanes(&masks.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>());
-        let lane_count = lanes.iter().copied().max().map_or(1, |n| n + 1) as f32;
-        for (m, lane) in masks.iter().zip(&lanes) {
+        let mask_lanes = lanes(&masks.iter().map(|m| (m.start, m.end)).collect::<Vec<_>>());
+        let lane_count = mask_lanes.iter().copied().max().map_or(1, |n| n + 1) as f32;
+        for (m, lane) in masks.iter().zip(&mask_lanes) {
             let (a, b) = (map.to_playback_nearest(m.start), map.to_playback_nearest(m.end));
             if b <= a {
                 continue;
@@ -383,6 +399,95 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             ed.selection = Selection::Mask(new_id);
         }
 
+        // Effect track: the hits in the audio as bars, and the effects over them.
+        let dur_src = ed.rec.meta.duration_ms;
+        {
+            let on_hit = beats::threshold(0.5);
+            let heard = &ed.rec.beats;
+            let (mid, tall) = (effect_row.center().y, effect_row.height() - 12.0);
+            let visible = ui.clip_rect();
+            let bars = ui.painter_at(effect_row);
+            let bar = |pb: f64, strength: f64| {
+                let x = x_of(pb);
+                if x < visible.left() - 2.0 || x > visible.right() + 2.0 {
+                    return;
+                }
+                let h = tall * strength.clamp(0.1, 1.0) as f32;
+                let color = theme::ACCENT.gamma_multiply(if strength >= on_hit { 0.55 } else { 0.2 });
+                bars.line_segment([pos2(x, mid - h / 2.0), pos2(x, mid + h / 2.0)], Stroke::new(1.5, color));
+            };
+            for b in &heard.beats {
+                if heard.loop_ms > 0.0 {
+                    let mut t = b.t;
+                    while t <= map.duration() {
+                        bar(t, b.strength);
+                        t += heard.loop_ms;
+                    }
+                } else if let Some(pb) = map.to_playback(b.t) {
+                    bar(pb, b.strength);
+                }
+            }
+            if ed.project.timeline.effects.is_empty() {
+                painter.text(effect_row.center(), egui::Align2::CENTER_CENTER, "Press and hold here while it plays to add an effect", egui::FontId::proportional(11.0), p.tertiary);
+            }
+        }
+        let effects = ed.project.timeline.effects.clone();
+        let effect_lanes = lanes(&effects.iter().map(|e| (e.start, e.end)).collect::<Vec<_>>());
+        let effect_lane_count = effect_lanes.iter().copied().max().map_or(1, |n| n + 1) as f32;
+        for (e, lane) in effects.iter().zip(&effect_lanes) {
+            let (a, b) = (map.to_playback_nearest(e.start), map.to_playback_nearest(e.end));
+            if b <= a {
+                continue;
+            }
+            let lane_h = effect_row.height() / effect_lane_count;
+            let top = effect_row.top() + *lane as f32 * lane_h;
+            let r = Rect::from_min_max(pos2(x_of(a) + 1.0, top + 0.5), pos2(x_of(b) - 1.0, top + lane_h - 0.5));
+            let selected = ed.selection == Selection::Effect(e.id);
+            painter.rect_filled(r, CornerRadius::same(6), effect_color().gamma_multiply(if selected { 0.6 } else { 0.4 }));
+            painter.rect_stroke(r, CornerRadius::same(6), Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { Color32::WHITE } else { effect_color() }), egui::StrokeKind::Inside);
+            let label = EffectKind::ALL.iter().find(|(k, _)| *k == e.kind).map_or("", |(_, n)| *n);
+            if r.width() > 40.0 {
+                painter.text(r.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, label, theme::semibold(11.0), Color32::WHITE);
+            }
+            if let Some(pos) = pointer
+                && r.expand(2.0).contains(pos)
+            {
+                let part = if (pos.x - r.left()).abs() < EDGE {
+                    Part::Left
+                } else if (pos.x - r.right()).abs() < EDGE {
+                    Part::Right
+                } else {
+                    Part::Body
+                };
+                if part != Part::Body {
+                    hover_cursor = Some(egui::CursorIcon::ResizeHorizontal);
+                }
+                if bg.drag_started() && drag.is_none() {
+                    drag = Some(Drag::Effect { id: e.id, part, grab_src: map.to_source(pb_of(pos.x)), orig: (e.start, e.end) });
+                    ed.selection = Selection::Effect(e.id);
+                } else if bg.clicked() {
+                    ed.selection = Selection::Effect(e.id);
+                }
+            }
+        }
+        // Pressing and dragging on empty space in the track paints a new
+        // effect: from the playhead while the video plays, from the pointer
+        // while it is paused.
+        if bg.drag_started()
+            && drag.is_none()
+            && let Some(pos) = pointer
+            && effect_row.contains(pos)
+        {
+            let at = ui.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+            let start = if ed.is_playing() { ed.source_at_playhead() } else { map.to_source(pb_of(at.x)) }.clamp(0.0, dur_src);
+            let mut draft = ed.project.clone();
+            let id = draft.timeline.new_id();
+            draft.timeline.effects.push(Effect { id, start, end: painted_end(start, start, dur_src), ..Default::default() });
+            ed.commit(draft);
+            ed.selection = Selection::Effect(id);
+            drag = Some(Drag::NewEffect { id, start });
+        }
+
         // Layout track.
         if has_cam {
             let layouts = ed.project.timeline.layouts.clone();
@@ -428,13 +533,13 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             && drag.is_none()
             && let Some(pos) = pointer
         {
-            let on_item = clip_row.contains(pos) || ((zoom_row.contains(pos) || mask_row.contains(pos)) && ed.selection != Selection::None);
+            let on_item = clip_row.contains(pos) || ((zoom_row.contains(pos) || mask_row.contains(pos) || effect_row.contains(pos)) && ed.selection != Selection::None);
             if ruler.contains(pos) || !on_item {
                 ed.seek(pb_of(pos.x));
                 if bg.drag_started() {
                     drag = Some(Drag::Playhead);
                 }
-                if !ruler.contains(pos) && bg.clicked() && !zoom_row.contains(pos) && !mask_row.contains(pos) && !clip_row.contains(pos) {
+                if !ruler.contains(pos) && bg.clicked() && !zoom_row.contains(pos) && !mask_row.contains(pos) && !effect_row.contains(pos) && !clip_row.contains(pos) {
                     ed.selection = Selection::None;
                 }
             }
@@ -445,7 +550,6 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             && bg.dragged()
         {
             let src = map.to_source(pb_of(pos.x).clamp(0.0, map.duration()));
-            let dur_src = ed.rec.meta.duration_ms;
             match d {
                 Drag::Playhead => ed.seek(pb_of(pos.x)),
                 Drag::SliceEdge { id, left, orig, grab_x } => {
@@ -496,6 +600,30 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                     }
                     ed.commit(draft);
                 }
+                Drag::Effect { id, part, grab_src, orig } => {
+                    let delta = src - grab_src;
+                    let mut draft = ed.project.clone();
+                    if let Some(e) = draft.timeline.effects.iter_mut().find(|e| e.id == id) {
+                        match part {
+                            Part::Body => {
+                                let len = orig.1 - orig.0;
+                                e.start = (orig.0 + delta).clamp(0.0, (dur_src - len).max(0.0));
+                                e.end = e.start + len;
+                            }
+                            Part::Left => e.start = clamp_or(orig.0 + delta, 0.0, orig.1 - Effect::MIN_LEN_MS, orig.0),
+                            Part::Right => e.end = clamp_or(orig.1 + delta, orig.0 + Effect::MIN_LEN_MS, dur_src, orig.1),
+                        }
+                    }
+                    ed.commit(draft);
+                }
+                Drag::NewEffect { id, start } => {
+                    let end = if ed.is_playing() { ed.source_at_playhead() } else { src };
+                    let mut draft = ed.project.clone();
+                    if let Some(e) = draft.timeline.effects.iter_mut().find(|e| e.id == id) {
+                        e.end = painted_end(start, end, dur_src);
+                    }
+                    ed.commit(draft);
+                }
                 Drag::Layout { id, part, grab_src, orig } => {
                     let delta = src - grab_src;
                     let mut draft = ed.project.clone();
@@ -530,7 +658,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
         }
 
         // Track labels and playhead.
-        for (r, name) in [(clip_row, "Clips"), (zoom_row, "Zoom"), (mask_row, "Masks")].into_iter().chain(has_cam.then_some((layout_row, "Camera"))) {
+        for (r, name) in [(clip_row, "Clips"), (zoom_row, "Zoom"), (mask_row, "Masks"), (effect_row, "Effects")].into_iter().chain(has_cam.then_some((layout_row, "Camera"))) {
             if map.links.is_empty() || name != "Clips" {
                 painter.text(r.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, name, egui::FontId::proportional(10.0), p.tertiary);
             }
@@ -553,6 +681,19 @@ mod tests {
     fn clamp_or_never_panics() {
         assert_eq!(super::clamp_or(5.0, 0.0, 3.0, 9.0), 3.0);
         assert_eq!(super::clamp_or(5.0, 4.0, 3.0, 9.0), 9.0);
+    }
+
+    #[test]
+    fn a_painted_effect_follows_the_playhead_within_the_recording() {
+        // Starts at its minimum length, then grows as the playhead moves on.
+        assert_eq!(super::painted_end(1000.0, 1000.0, 10_000.0), 1200.0);
+        assert_eq!(super::painted_end(1000.0, 4000.0, 10_000.0), 4000.0);
+        // Dragging back doesn't make it shorter than the minimum or end before it starts.
+        assert_eq!(super::painted_end(1000.0, 500.0, 10_000.0), 1200.0);
+        // Never past the end of the recording, and at the very end it is as long as it can be.
+        assert_eq!(super::painted_end(1000.0, 99_000.0, 10_000.0), 10_000.0);
+        assert_eq!(super::painted_end(9_950.0, 9_950.0, 10_000.0), 10_000.0);
+        assert_eq!(super::painted_end(10_000.0, 10_000.0, 10_000.0), 10_000.0);
     }
 
     #[test]

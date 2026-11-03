@@ -27,6 +27,7 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             Selection::Slice(id) => slice_panel(ui, &mut draft, id),
             Selection::Layout(id) => layout_panel(ui, &mut draft, id),
             Selection::Mask(id) => mask_panel(ui, ed, &mut draft, id),
+            Selection::Effect(id) => effect_panel(ui, ed, &mut draft, id),
             Selection::None => {
                 match ed.tab {
                     Tab::Background => background(ui, ed, &mut draft),
@@ -790,6 +791,47 @@ fn mask_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
     });
     if delete {
         d.timeline.masks.retain(|m| m.id != id);
+        ed.selection = Selection::None;
+    }
+}
+
+fn effect_panel(ui: &mut Ui, ed: &mut Editor, d: &mut Project, id: u64) {
+    let wanted = crate::project::beats::wanted(d, &ed.rec, &ed.package);
+    let Some(e) = d.timeline.effects.iter_mut().find(|e| e.id == id) else { return };
+    let mut delete = false;
+    section(ui, "Effect", |ui| {
+        segmented(ui, &mut e.kind, &EffectKind::ALL);
+        caption(
+            ui,
+            match e.kind {
+                EffectKind::Shake => "The picture jolts on every hit in the audio.",
+                EffectKind::Pulse => "The picture swells a little on every hit in the audio.",
+            },
+        );
+        slider(ui, "Strength", &mut e.strength, 0.0..=1.0, "");
+        slider(ui, "Sensitivity", &mut e.sensitivity, 0.0..=1.0, "");
+        caption(ui, "Higher sensitivity reacts to softer hits too.");
+        caption(
+            ui,
+            &match &wanted {
+                None => "Nothing to follow: add background music in the Audio tab, or record the Mac's sound.".to_string(),
+                Some(_) if ed.beats_job.is_some() => "Finding the beats…".to_string(),
+                Some(w) if w.is_music() => format!("Follows the background music ({} hits found).", ed.rec.beats.beats.len()),
+                Some(_) => format!("Follows the recording's sound ({} hits found).", ed.rec.beats.beats.len()),
+            },
+        );
+        caption(ui, &format!("{} – {}", widgets::fmt_time(e.start), widgets::fmt_time(e.end)));
+        ui.horizontal(|ui| {
+            if ui.button("Delete effect").clicked() {
+                delete = true;
+            }
+            if ui.button("Done").clicked() {
+                ed.selection = Selection::None;
+            }
+        });
+    });
+    if delete {
+        d.timeline.effects.retain(|e| e.id != id);
         ed.selection = Selection::None;
     }
 }

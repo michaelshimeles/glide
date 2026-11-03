@@ -14,6 +14,7 @@ use super::preview::Preview;
 use super::theme::{self, pal};
 use super::widgets::{self, fmt_time};
 use super::{inspector, timeline};
+use crate::engine::beats::Beats;
 use crate::export::{self, Job, Source, Stats};
 use crate::project::model::{Codec, ExportFormat, ExportSettings, Project, Quality, Slice, Zoom};
 use crate::project::recording::Recording;
@@ -27,6 +28,7 @@ pub enum Selection {
     Zoom(u64),
     Layout(u64),
     Mask(u64),
+    Effect(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,6 +168,11 @@ pub struct Editor {
     /// Where exports are saved (the app setting, copied in each frame); None
     /// means next to the recording.
     pub export_dir: Option<PathBuf>,
+    /// Finding the hits in the audio that effects follow, in the background:
+    /// the audio's key and the hits (or what went wrong).
+    pub beats_job: Option<JoinHandle<(String, Result<Beats, String>)>>,
+    /// The audio `rec.beats` is for (None: none yet).
+    beats_key: Option<String>,
 }
 
 /// Why a recording has no sound.
@@ -185,6 +192,11 @@ impl Editor {
         if !package.project_file().exists() {
             package.save_project(&project)?;
         }
+        // The hits `load` read from the package are for this audio.
+        let beats_key = crate::project::read_json_or_default::<crate::project::beats::Cache>(&package.rec("beats.json"))
+            .ok()
+            .map(|c| c.key)
+            .filter(|k| !k.is_empty());
         let preview = Preview::new(gpu, path.to_path_buf(), &project, &rec);
         let mask_watch = super::maskwatch::MaskWatch::new(package.rec(&rec.meta.screen.file));
         let mut audio = AudioPreview::new();
@@ -230,6 +242,8 @@ impl Editor {
             peaks,
             silence_noted: false,
             export_dir: None,
+            beats_job: None,
+            beats_key,
         })
     }
 
@@ -284,6 +298,7 @@ impl Editor {
             Selection::Zoom(id) => tl.zooms.iter().any(|z| z.id == id),
             Selection::Layout(id) => tl.layouts.iter().any(|l| l.id == id),
             Selection::Mask(id) => tl.masks.iter().any(|m| m.id == id),
+            Selection::Effect(id) => tl.effects.iter().any(|e| e.id == id),
         };
         if !exists {
             self.selection = Selection::None;
@@ -423,6 +438,7 @@ impl Editor {
             Selection::Zoom(id) => p.timeline.zooms.retain(|z| z.id != id),
             Selection::Layout(id) => p.timeline.layouts.retain(|l| l.id != id),
             Selection::Mask(id) => p.timeline.masks.retain(|m| m.id != id),
+            Selection::Effect(id) => p.timeline.effects.retain(|e| e.id != id),
             Selection::None => {}
         });
         self.selection = Selection::None;
@@ -483,6 +499,59 @@ impl Editor {
             p.timeline.voiceovers.push(crate::project::model::VoiceOver { id, file, start, duration: ms, volume: 1.0 });
         });
         self.status = Some(format!("Added a {:.1} s voice-over", ms / 1000.0));
+    }
+
+    /// Add a three second shake at the playhead.
+    pub fn add_effect(&mut self) {
+        let src = self.source_at_playhead();
+        let end_limit = self.rec.meta.duration_ms;
+        let mut new_id = 0;
+        self.edit(|p| {
+            let id = p.timeline.new_id();
+            new_id = id;
+            let start = src.max(0.0);
+            let end = (start + 3000.0).min(end_limit);
+            p.timeline.effects.push(crate::project::model::Effect { id, start, end, ..Default::default() });
+        });
+        self.selection = Selection::Effect(new_id);
+    }
+
+    /// Keep `rec.beats` for the audio effects follow: find the hits in the
+    /// background when an effect needs them and they aren't there yet, and
+    /// drop them when nothing needs them.
+    fn update_beats(&mut self) {
+        if self.beats_job.as_ref().is_some_and(|h| h.is_finished()) {
+            let (key, found) = match self.beats_job.take().map(|h| h.join()) {
+                Some(Ok(done)) => done,
+                _ => (String::new(), Err("the analysis crashed".to_string())),
+            };
+            match found {
+                Ok(beats) => self.rec.beats = beats,
+                Err(e) => self.status = Some(format!("Couldn't find the beats: {e}")),
+            }
+            // Also after a failure, so it isn't tried again every frame; another song retries.
+            self.beats_key = Some(key);
+            self.preview.set_project(&self.project, &self.rec);
+        }
+        if self.beats_job.is_some() {
+            return;
+        }
+        let wanted = if self.project.timeline.effects.is_empty() { None } else { crate::project::beats::wanted(&self.project, &self.rec, &self.package) };
+        match wanted {
+            Some(w) if self.beats_key.as_deref() != Some(&w.key) => {
+                let pkg = self.package.clone();
+                self.beats_job = Some(std::thread::spawn(move || {
+                    let found = objc2::rc::autoreleasepool(|_| crate::project::beats::analyze(&pkg, &w)).map_err(|e| format!("{e:#}"));
+                    (w.key, found)
+                }));
+            }
+            None if self.beats_key.is_some() || !self.rec.beats.beats.is_empty() => {
+                self.rec.beats = Beats::default();
+                self.beats_key = None;
+                self.preview.set_project(&self.project, &self.rec);
+            }
+            _ => {}
+        }
     }
 
     /// Add a blur mask at the playhead.
@@ -578,7 +647,23 @@ impl Editor {
         let _ = v2;
     }
 
+    /// Whether the hits effects follow are in `rec.beats` (true when no
+    /// effect needs them).
+    fn beats_ready(&self) -> bool {
+        if self.project.timeline.effects.is_empty() {
+            return true;
+        }
+        match crate::project::beats::wanted(&self.project, &self.rec, &self.package) {
+            Some(w) => self.beats_job.is_none() && self.beats_key.as_deref() == Some(&w.key),
+            None => true,
+        }
+    }
+
     pub fn start_export(&mut self) {
+        if !self.beats_ready() {
+            self.status = Some("Still finding the beats for the effects. Try again in a moment.".into());
+            return;
+        }
         let settings = self.project.export;
         let output = export::output_path(self.export_dir.as_deref(), &self.package.root, &settings);
         if let Some(dir) = output.parent()
@@ -640,6 +725,7 @@ impl Editor {
                 self.status = Some(silence_note(&self.rec, p).into());
             }
         }
+        self.update_beats();
         let exposures_changed = self.mask_watch.update(&self.project.timeline.masks);
         if self.dirty_at.is_some_and(|t| t.elapsed() > Duration::from_millis(800)) {
             self.save();
@@ -685,7 +771,7 @@ impl Editor {
 
     /// Whether an export or transcription is running (progress to show).
     pub fn background_busy(&self) -> bool {
-        self.export.running.is_some() || self.transcribing.is_some()
+        self.export.running.is_some() || self.transcribing.is_some() || self.beats_job.is_some()
     }
 
     /// Stop playback, ending a voice-over (no-op when paused).
@@ -716,6 +802,9 @@ impl Editor {
         }
         if !cmd && pressed(egui::Key::M) {
             self.add_mask();
+        }
+        if !cmd && pressed(egui::Key::E) {
+            self.add_effect();
         }
         if !cmd && pressed(egui::Key::L) {
             self.looping = !self.looping;
@@ -865,7 +954,7 @@ impl Editor {
         // Timeline, across the whole window under everything else.
         egui::Panel::bottom("timeline")
             .show_separator_line(false)
-            .exact_size(if self.rec.meta.camera.is_some() { 252.0 } else { 204.0 } + timeline::extra_height(self))
+            .exact_size(if self.rec.meta.camera.is_some() { 298.0 } else { 250.0 } + timeline::extra_height(self))
             .frame(egui::Frame::new().fill(p.sidebar).inner_margin(egui::Margin::symmetric(12, 8)))
             .show(ui, |ui| {
                 timeline::ui(ui, self);
@@ -1109,7 +1198,7 @@ impl Editor {
         use super::glyph::Glyph;
         let p = pal(ui);
         let has_camera = self.rec.meta.camera.is_some();
-        let n = if has_camera { 6.0 } else { 5.0 };
+        let n = if has_camera { 7.0 } else { 6.0 };
         let area = ui.available_rect_before_wrap();
         let height = n * 34.0 + (n - 1.0) * 2.0 + 16.0;
         let pill = egui::Rect::from_center_size(egui::pos2(area.center().x, area.center().y), vec2(46.0, height));
@@ -1128,6 +1217,12 @@ impl Editor {
                     }
                     if widgets::glyph_button(ui, Glyph::Mask, 18.0, false, true).on_hover_text("Blur, pixelate or highlight a region (M)").clicked() {
                         self.add_mask();
+                    }
+                    if widgets::glyph_button(ui, Glyph::Shake, 18.0, false, true)
+                        .on_hover_text("Add a shake that follows the beat of the audio (E). Or press and hold in the Effects track while it plays.")
+                        .clicked()
+                    {
+                        self.add_effect();
                     }
                     if has_camera && widgets::glyph_button(ui, Glyph::Camera, 18.0, false, true).on_hover_text("Add a camera layout at the playhead").clicked() {
                         let src = self.source_at_playhead();

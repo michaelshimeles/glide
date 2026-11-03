@@ -15,6 +15,7 @@ pub enum Glyph {
     Scissors,
     ZoomPlus,
     Mask,
+    Shake,
     Trash,
     Loop,
     Prev,
@@ -105,6 +106,12 @@ pub fn paint(p: &Painter, c: Pos2, size: f32, g: Glyph, color: Color32) {
             outline((-8.0, -8.0), (8.0, 8.0), 2.0);
             circle(0.0, 0.0, 4.0);
         }
+        // A sound wave: bars of different heights.
+        Glyph::Shake => {
+            for (x, h) in [(-8.0, 3.0), (-4.0, 7.0), (0.0, 10.0), (4.0, 6.0), (8.0, 3.0)] {
+                line(&[(x, -h), (x, h)]);
+            }
+        }
         Glyph::Trash => {
             line(&[(-8.0, -5.0), (8.0, -5.0)]);
             line(&[(-3.0, -5.0), (-3.0, -8.0), (3.0, -8.0), (3.0, -5.0)]);
@@ -173,6 +180,7 @@ mod tests {
             Glyph::Scissors,
             Glyph::ZoomPlus,
             Glyph::Mask,
+            Glyph::Shake,
             Glyph::Trash,
             Glyph::Loop,
             Glyph::Prev,

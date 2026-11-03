@@ -157,6 +157,41 @@ pub fn add_tone(output: &std::path::Path, hz: f64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Give a synthetic package a system-audio track of kick drums, `bpm` beats a
+/// minute with the first a quarter of a second in, and a shake effect over
+/// the whole recording to follow them.
+pub fn add_beats(output: &std::path::Path, bpm: f64) -> anyhow::Result<()> {
+    use crate::capture::mixer::RATE;
+    use crate::project::model::Effect;
+    use crate::project::recording::AudioTrack;
+    use crate::project::{self, Package};
+    let pkg = Package::new(output);
+    let (mut proj, mut rec) = pkg.load()?;
+    let n = (rec.meta.duration_ms / 1000.0 * RATE) as usize;
+    let mut audio = vec![[0.0f32; 2]; n];
+    let every = 60_000.0 / bpm.max(1.0);
+    let mut at = 250.0;
+    while at < rec.meta.duration_ms {
+        let start = (at / 1000.0 * RATE) as usize;
+        // A 60 Hz kick that dies away over about 0.2 s.
+        for k in 0..(0.2 * RATE) as usize {
+            let t = k as f64 / RATE;
+            if let Some(o) = audio.get_mut(start + k) {
+                let v = (0.8 * (-t / 0.05).exp() * (std::f64::consts::TAU * 60.0 * t).sin()) as f32;
+                *o = [v, v];
+            }
+        }
+        at += every;
+    }
+    crate::app::player::write_wav(&pkg.rec("system.wav"), &audio)?;
+    rec.meta.system_audio = Some(AudioTrack { file: "system.wav".into(), track: 0 });
+    project::write_json(&pkg.rec("meta.json"), &rec.meta)?;
+    let id = proj.timeline.new_id();
+    proj.timeline.effects.push(Effect { id, start: 0.0, end: rec.meta.duration_ms, strength: 1.0, ..Default::default() });
+    pkg.save_project(&proj)?;
+    Ok(())
+}
+
 fn write(output: &std::path::Path, rec: Recording, duration: f64) -> anyhow::Result<(u64, usize)> {
     use crate::media::writer::{MovieWriter, WriterSpec, fill_bgra};
     use crate::project::{self, Package, model::Codec};

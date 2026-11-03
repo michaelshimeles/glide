@@ -140,8 +140,8 @@ enum Cmd {
         project: Option<PathBuf>,
         #[arg(long)]
         tab: Option<String>,
-        /// Select the first zoom, mask or slice.
-        #[arg(long, value_parser = ["zoom", "mask", "slice"])]
+        /// Select the first zoom, mask, effect or slice.
+        #[arg(long, value_parser = ["zoom", "mask", "effect", "slice"])]
         select: Option<String>,
         #[arg(long)]
         export_sheet: bool,
@@ -239,6 +239,10 @@ enum Cmd {
         /// Add a system-audio track: a sine tone at this many Hz.
         #[arg(long)]
         tone: Option<f64>,
+        /// Add a system-audio track of kick drums at this many beats per
+        /// minute, and a shake effect over the whole recording to follow them.
+        #[arg(long)]
+        beats: Option<f64>,
     },
 }
 
@@ -257,7 +261,7 @@ fn main() -> Result<()> {
         Some(Cmd::Export { project, synthetic, output, format, height, fps, quality, codec, target_mb }) => {
             export_cmd(project, synthetic, output, format, height, fps, quality, codec, target_mb)
         }
-        Some(Cmd::Synth { output, duration, width, height, device, tone }) => synth(output, duration, width, height, device, tone),
+        Some(Cmd::Synth { output, duration, width, height, device, tone, beats }) => synth(output, duration, width, height, device, tone, beats),
         Some(Cmd::Record { display, window, area, device, pattern, mic, no_system_audio, camera, duration, fps, dir, name, hide_icons, hide_dock }) => {
             record(display, window, area, device, pattern, mic, !no_system_audio, camera, duration, fps, dir, name, (hide_icons, hide_dock))
         }
@@ -552,7 +556,9 @@ fn export_cmd(
     } else {
         let path = pkg.expect("project path or --synthetic");
         let pkg = Package::new(&path);
-        let (p, r) = pkg.load()?;
+        let (p, mut r) = pkg.load()?;
+        // Effects follow the beat: find it first (a moment, only once).
+        glide::project::beats::ensure(&pkg, &p, &mut r)?;
         (p, r, Source::Package(path.clone()), path)
     };
     let mut settings = proj.export;
@@ -608,11 +614,14 @@ fn export_cmd(
     Ok(())
 }
 
-fn synth(output: PathBuf, duration: f64, width: u32, height: u32, device: bool, tone: Option<f64>) -> Result<()> {
+fn synth(output: PathBuf, duration: f64, width: u32, height: u32, device: bool, tone: Option<f64>, beats: Option<f64>) -> Result<()> {
     let write = if device { glide::synth::write_device_package } else { glide::synth::write_package };
     let (frames, zooms) = write(&output, duration, width, height)?;
     if let Some(hz) = tone {
         glide::synth::add_tone(&output, hz)?;
+    }
+    if let Some(bpm) = beats {
+        glide::synth::add_beats(&output, bpm)?;
     }
     println!("{} ({frames} frames, {zooms} zooms)", output.display());
     Ok(())

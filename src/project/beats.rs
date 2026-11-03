@@ -44,6 +44,13 @@ pub fn wanted(project: &Project, rec: &Recording, pkg: &Package) -> Option<Wante
     Some(Wanted { key: format!("system:{}:{}", sys.file, sys.track), music: false, file: pkg.rec(&sys.file), track: sys.track })
 }
 
+impl Wanted {
+    /// Whether it is the background music (else the recording's own sound).
+    pub fn is_music(&self) -> bool {
+        self.music
+    }
+}
+
 /// The hits in `want`: from the package's cache when it is for the same
 /// audio, else found by reading the audio (which takes a moment) and saved.
 pub fn analyze(pkg: &Package, want: &Wanted) -> Result<Beats> {
