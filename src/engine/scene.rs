@@ -105,6 +105,17 @@ pub struct TextLayer {
     pub blur: f64,
     /// Draw as a key badge (pill) instead of a caption.
     pub badge: bool,
+    /// Size multiplier about the centre.
+    pub scale: f64,
+    /// Draw as an outlined short-form caption with one word highlighted.
+    pub pop: Option<Pop>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pop {
+    /// Index of the highlighted word.
+    pub active: usize,
+    pub highlight: crate::project::model::Color,
 }
 
 /// A region effect on the screen (blur, pixelate or highlight).
@@ -501,22 +512,48 @@ impl Scene {
         // Overlays.
         let mut texts = vec![];
         let base_font = (size.y * 0.05).min(size.x * 0.07);
-        if style.captions.show
+        let cs = style.captions;
+        let pop = cs.look == crate::project::model::CaptionLook::Pop;
+        if cs.show
             && let Some(line) = captions::line_at(&self.lines, src)
         {
-            let text = line.text();
-            texts.push(TextLayer {
-                size: fit_font(&text, base_font * style.captions.size, size.x * 0.92),
-                text,
-                center: v2(size.x / 2.0, size.y - base_font * 1.6),
-                alpha: 1.0,
-                blur: 0.0,
-                badge: false,
-            });
+            if pop {
+                let (shown, active) = captions::focus(line, src, cs.words_per_line as usize);
+                let mut text = shown.text();
+                if cs.uppercase {
+                    text = text.to_uppercase();
+                }
+                let since = src - shown.start;
+                // Capitals are wider, so they get less room.
+                let room = size.x * if cs.uppercase { 0.76 } else { 0.92 };
+                texts.push(TextLayer {
+                    size: fit_font(&text, base_font * 1.5 * cs.size, room),
+                    text,
+                    center: v2(size.x / 2.0, size.y * cs.position),
+                    alpha: (since / 80.0).clamp(0.0, 1.0),
+                    blur: 0.0,
+                    badge: false,
+                    scale: captions::pop_scale(since),
+                    pop: Some(Pop { active, highlight: cs.highlight }),
+                });
+            } else {
+                let text = line.text();
+                texts.push(TextLayer {
+                    size: fit_font(&text, base_font * cs.size, size.x * 0.92),
+                    text,
+                    center: v2(size.x / 2.0, size.y - base_font * 1.6),
+                    alpha: 1.0,
+                    blur: 0.0,
+                    badge: false,
+                    scale: 1.0,
+                    pop: None,
+                });
+            }
         }
         if style.shortcuts.show {
             let font = base_font * style.shortcuts.size;
-            let caption_lift = if texts.is_empty() { 0.0 } else { base_font * style.captions.size * 1.8 };
+            // Box captions sit at the bottom, where the badges go; pop captions are higher up.
+            let caption_lift = if texts.is_empty() || pop { 0.0 } else { base_font * cs.size * 1.8 };
             let near: Vec<usize> = (0..self.badges.len())
                 .filter(|&i| {
                     let b = &self.badges[i];
@@ -548,6 +585,8 @@ impl Scene {
                         alpha: v[0].clamp(0.0, 1.0),
                         blur: v[2] * k,
                         badge: true,
+                        scale: 1.0,
+                        pop: None,
                     });
                 }
             }

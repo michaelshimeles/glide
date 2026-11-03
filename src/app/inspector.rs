@@ -386,6 +386,20 @@ fn captions(ui: &mut Ui, ed: &mut Editor, d: &mut Project) {
     section(ui, "Captions", |ui| {
         toggle_row(ui, "Show captions", &mut d.style.captions.show);
         slider(ui, "Size", &mut d.style.captions.size, 0.5..=2.0, "×");
+        let c = &mut d.style.captions;
+        row(ui, "Look", |ui| {
+            segmented(ui, &mut c.look, &[(CaptionLook::Box, "Box"), (CaptionLook::Pop, "TikTok")]);
+        });
+        if c.look == CaptionLook::Pop {
+            row(ui, "Words at once", |ui| {
+                segmented(ui, &mut c.words_per_line, &[(1, "1"), (2, "2"), (3, "3"), (4, "4"), (0, "Line")]);
+            });
+            row(ui, "Spoken word", |ui| {
+                widgets::color_edit(ui, &mut c.highlight);
+            });
+            toggle_row(ui, "Capital letters", &mut c.uppercase);
+            slider(ui, "Position", &mut c.position, 0.3..=0.95, "");
+        }
         if ed.rec.transcript.is_empty() {
             caption(ui, "No transcript yet.");
             if ed.rec.meta.mic.is_some() {
