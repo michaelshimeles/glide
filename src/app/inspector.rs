@@ -28,7 +28,6 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             Selection::Layout(id) => layout_panel(ui, &mut draft, id),
             Selection::Mask(id) => mask_panel(ui, ed, &mut draft, id),
             Selection::None => {
-                tabs(ui, &mut ed.tab);
                 match ed.tab {
                     Tab::Background => background(ui, ed, &mut draft),
                     Tab::Cursor => cursor(ui, &mut draft, ed.rec.mouse.is_empty()),
@@ -53,23 +52,19 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
     });
 }
 
-fn tabs(ui: &mut Ui, tab: &mut Tab) {
-    let p = pal(ui);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-        for (t, label) in Tab::ALL {
-            let sel = *tab == t;
-            let b = egui::Button::new(RichText::new(label).size(12.0).color(if sel { Color32::WHITE } else { p.text }))
-                .fill(if sel { theme::accent() } else { p.control })
-                .stroke(if sel { Stroke::NONE } else { Stroke::new(0.5, p.control_border) })
-                .corner_radius(CornerRadius::same(12));
-            if ui.add(b).clicked() {
-                *tab = t;
+/// The tab icons that sit beside the inspector. Picking one shows that tab,
+/// also when something on the timeline is selected.
+pub fn rail(ui: &mut Ui, ed: &mut Editor) {
+    ui.vertical_centered(|ui| {
+        ui.spacing_mut().item_spacing.y = 6.0;
+        for (tab, label) in Tab::ALL {
+            let selected = ed.tab == tab && ed.selection == Selection::None;
+            if widgets::glyph_button(ui, tab.glyph(), 20.0, selected, true).on_hover_text(label).clicked() {
+                ed.tab = tab;
+                ed.selection = Selection::None;
             }
         }
     });
-    ui.add_space(4.0);
-    ui.separator();
 }
 
 /// Ask for a PNG or JPEG, check it decodes, and copy it into the package.

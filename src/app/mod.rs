@@ -7,6 +7,7 @@ pub mod editor;
 pub mod maskwatch;
 pub mod home;
 pub mod hotkey;
+pub mod glyph;
 pub mod inspector;
 pub mod macos;
 pub mod menubar;
@@ -1898,7 +1899,7 @@ impl App {
             let mut enc = gpu.device.create_command_encoder(&Default::default());
             let extra = win.renderer.update_buffers(&gpu.device, &gpu.queue, &mut enc, &prims, &sd);
             {
-                let bg = theme::palette(win.ctx.theme() == egui::Theme::Dark).window;
+                let bg = theme::palette().window;
                 let [r, g, b, _] = bg.to_normalized_gamma_f32();
                 let mut pass = enc
                     .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2005,7 +2006,6 @@ impl ApplicationHandler for App {
                 win.window.request_redraw();
             }
             WindowEvent::ThemeChanged(_) => {
-                theme::set_accent(theme::system_accent());
                 theme::apply(&win.ctx);
                 win.window.request_redraw();
             }
@@ -2093,7 +2093,6 @@ impl ApplicationHandler for App {
 
 /// Run the app (blocks until quit). `open` = a project to open at launch.
 pub fn run(open: Option<PathBuf>) -> Result<()> {
-    theme::set_accent(theme::system_accent());
     // Let connected iPhones/iPads appear as recordable devices.
     crate::capture::camera::enable_screen_capture_devices();
     std::thread::spawn(player::sweep_stale);

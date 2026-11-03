@@ -1109,8 +1109,7 @@ pub fn start_view(
         .frame(egui::Frame::new().fill(p.window).inner_margin(egui::Margin::same(16)))
         .show(ui, |ui| {
             let area = ui.available_rect_before_wrap();
-            let backdrop = if ui.visuals().dark_mode { Color32::from_rgb(0x1c, 0x1c, 0x1e) } else { Color32::from_rgb(0xe4, 0xe4, 0xe7) };
-            ui.painter().rect_filled(area, CornerRadius::same(8), backdrop);
+            ui.painter().rect_filled(area, CornerRadius::same(8), p.window);
             if perms.open {
                 if let Some(ev) = super::permissions::card(ui, &perms.list) {
                     chrome.set(match ev {

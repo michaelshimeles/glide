@@ -50,6 +50,20 @@ impl Tab {
         (Tab::Shortcuts, "Keys"),
         (Tab::Animation, "Motion"),
     ];
+
+    /// The icon on the inspector's rail.
+    pub fn glyph(self) -> super::glyph::Glyph {
+        use super::glyph::Glyph;
+        match self {
+            Tab::Background => Glyph::Frame,
+            Tab::Cursor => Glyph::Cursor,
+            Tab::Camera => Glyph::Camera,
+            Tab::Captions => Glyph::Captions,
+            Tab::Audio => Glyph::Audio,
+            Tab::Shortcuts => Glyph::Keys,
+            Tab::Animation => Glyph::Motion,
+        }
+    }
 }
 
 /// Leaving the editor any way (back to the library, opening another project,
@@ -848,30 +862,54 @@ impl Editor {
                 });
             });
 
-        // Inspector.
-        egui::Panel::right("inspector")
-            .exact_size(320.0)
-            .resizable(false)
-            .frame(egui::Frame::new().fill(p.inspector).inner_margin(egui::Margin::symmetric(14, 10)))
-            .show(ui, |ui| {
-                inspector::ui(ui, self);
-            });
-
-        // Timeline.
+        // Timeline, across the whole window under everything else.
         egui::Panel::bottom("timeline")
-            .exact_size(if self.rec.meta.camera.is_some() { 284.0 } else { 236.0 } + timeline::extra_height(self))
+            .show_separator_line(false)
+            .exact_size(if self.rec.meta.camera.is_some() { 252.0 } else { 204.0 } + timeline::extra_height(self))
             .frame(egui::Frame::new().fill(p.sidebar).inner_margin(egui::Margin::symmetric(12, 8)))
             .show(ui, |ui| {
-                self.transport(ui);
-                ui.add_space(4.0);
                 timeline::ui(ui, self);
             });
 
-        // Preview.
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(if ui.visuals().dark_mode { Color32::from_rgb(0x1c, 0x1c, 0x1e) } else { Color32::from_rgb(0xe4, 0xe4, 0xe7) }))
+        // Inspector: a floating panel, with the tab icons in a rail beside it.
+        egui::Panel::right("inspector")
+            .show_separator_line(false)
+            .exact_size(304.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(p.inspector)
+                    .corner_radius(CornerRadius::same(16))
+                    .inner_margin(egui::Margin::symmetric(16, 12))
+                    .outer_margin(egui::Margin { left: 0, right: 10, top: 6, bottom: 6 }),
+            )
             .show(ui, |ui| {
-                let avail = ui.available_rect_before_wrap().shrink(24.0);
+                inspector::ui(ui, self);
+            });
+        egui::Panel::right("inspector-rail")
+            .show_separator_line(false)
+            .exact_size(56.0)
+            .resizable(false)
+            .frame(egui::Frame::new().fill(p.window).inner_margin(egui::Margin::symmetric(4, 10)))
+            .show(ui, |ui| {
+                inspector::rail(ui, self);
+            });
+
+        // The edit tools, floating at the left.
+        egui::Panel::left("tools").show_separator_line(false).exact_size(64.0).resizable(false).frame(egui::Frame::new().fill(p.window)).show(ui, |ui| {
+            self.tool_rail(ui);
+        });
+
+        // Preview, with its toolbar above and the transport below.
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(p.window))
+            .show(ui, |ui| {
+                let full = ui.available_rect_before_wrap();
+                let bar = egui::Rect::from_min_max(full.min, egui::pos2(full.right(), full.top() + 44.0));
+                let transport = egui::Rect::from_min_max(egui::pos2(full.left(), full.bottom() - 56.0), full.max);
+                self.canvas_toolbar(ui, bar);
+                self.transport(ui, transport);
+                let avail = egui::Rect::from_min_max(egui::pos2(full.left() + 16.0, bar.bottom() + 2.0), egui::pos2(full.right() - 16.0, transport.top() - 4.0));
                 let aspect = self.preview.output_aspect();
                 let mut size = vec2(avail.width(), avail.width() / aspect);
                 if size.y > avail.height() {
@@ -905,13 +943,10 @@ impl Editor {
                         self.toggle_play();
                     }
                 }
-                if let Some(s) = &self.status {
-                    ui.painter().text(rect.left_bottom() + vec2(0.0, 14.0), egui::Align2::LEFT_TOP, s, egui::FontId::proportional(11.0), p.secondary);
-                }
-                // Just recorded: a quick way out without touching the editor.
+                // Just recorded: a quick way out without touching the editor,
+                // in the place of the preview's toolbar.
                 if self.fresh && self.export.running.is_none() {
-                    let bar = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() - 4.0), vec2(420.0, 40.0));
-                    let bar = bar.translate(vec2(0.0, -bar.height() / 2.0 + 18.0));
+                    let bar = egui::Rect::from_center_size(bar.center(), vec2(420.0, 40.0));
                     ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
                         egui::Frame::new()
                             .fill(p.popover)
@@ -963,49 +998,161 @@ impl Editor {
         });
     }
 
-    fn transport(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            let label = if self.is_playing() { "⏸" } else { "▶" };
-            if ui.add(egui::Button::new(RichText::new(label).size(14.0)).min_size(vec2(32.0, 24.0))).on_hover_text("Play/Pause (Space)").clicked() {
-                self.toggle_play();
-            }
-            ui.label(RichText::new(format!("{} / {}", fmt_time(self.playhead), fmt_time(self.duration()))).monospace());
-            if ui.selectable_label(self.looping, "Loop").on_hover_text("Loop playback (L)").clicked() {
-                self.looping = !self.looping;
-            }
-            if ui.selectable_label(self.reel_guide, "Reel mode").on_hover_text("Preview the video inside a TikTok or Reels feed, with the app's own buttons and text (G)").clicked() {
-                self.reel_guide = !self.reel_guide;
-            }
-            ui.separator();
-            if ui.button("✂ Split").on_hover_text("Split at playhead (S or ⌘B). Q trims everything before the playhead, W everything after.").clicked() {
-                self.split();
-            }
-            if ui.button("+ Zoom").on_hover_text("Add zoom at playhead (Z)").clicked() {
-                self.add_zoom();
-            }
-            if ui.button("+ Mask").on_hover_text("Blur, pixelate or highlight a region (M)").clicked() {
-                self.add_mask();
-            }
-            if self.rec.meta.camera.is_some() && ui.button("+ Layout").clicked() {
-                let src = self.source_at_playhead();
-                let dur_src = self.rec.meta.duration_ms;
-                self.edit(|p| {
-                    let id = p.timeline.new_id();
-                    p.timeline.layouts.push(crate::project::model::LayoutRange {
-                        id,
-                        start: src,
-                        end: (src + 3000.0).min(dur_src).max(src),
-                        kind: crate::project::model::LayoutKind::CameraOnly,
-                        ..Default::default()
-                    });
+    /// Jump to the start of this clip (or the previous one) or to the start
+    /// of the next one.
+    fn seek_clip(&mut self, forward: bool) {
+        let t = self.playhead;
+        let links = &self.preview.scene.map.links;
+        let target = if forward {
+            links.iter().map(|l| l.pb_end).find(|&e| e > t + 50.0)
+        } else {
+            links.iter().map(|l| l.pb_start).rev().find(|&s| s < t - 50.0)
+        };
+        self.seek(target.unwrap_or(if forward { self.duration() } else { 0.0 }));
+    }
+
+    /// The preview's toolbar: aspect ratio, crop and reel mode. Status
+    /// messages ("Cut 3 pauses") show at the right.
+    fn canvas_toolbar(&mut self, ui: &mut Ui, bar: egui::Rect) {
+        use super::glyph::Glyph;
+        use crate::project::model::Aspect;
+        if self.fresh && self.export.running.is_none() {
+            return; // the "Recorded" banner takes this row
+        }
+        let row = egui::Rect::from_min_size(egui::pos2(bar.center().x - 190.0, bar.top()), vec2(380.0, bar.height()));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(row).layout(Layout::left_to_right(Align::Center)), |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let stacked = self.project.style.camera.stacked;
+            let label = if stacked {
+                "Vertical 9:16"
+            } else {
+                Aspect::PRESETS.iter().find(|(_, a)| *a == self.project.style.aspect).map_or("Custom", |(n, _)| n)
+            };
+            let resp = widgets::pill(ui, Some(Glyph::Frame), label, !stacked, false);
+            if !stacked {
+                egui::Popup::menu(&resp).show(|ui| {
+                    ui.set_min_width(150.0);
+                    let mut aspect = self.project.style.aspect;
+                    for (name, a) in Aspect::PRESETS {
+                        ui.selectable_value(&mut aspect, a, name);
+                    }
+                    if aspect != self.project.style.aspect {
+                        let mut d = self.project.clone();
+                        d.style.aspect = aspect;
+                        self.commit(d);
+                    }
                 });
             }
-            if ui.add_enabled(self.selection != Selection::None, egui::Button::new("Delete")).clicked() {
-                self.delete_selection();
+            if widgets::pill(ui, Some(Glyph::Crop), "Crop", false, false).on_hover_text("Crop the recording (in the Background panel)").clicked() {
+                self.tab = Tab::Background;
+                self.selection = Selection::None;
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.add(egui::Slider::new(&mut self.px_per_sec, 20.0..=400.0).logarithmic(true).show_value(false));
-                widgets::caption(ui, "Zoom");
+            if widgets::pill(ui, Some(Glyph::Phone), "Reel mode", false, self.reel_guide)
+                .on_hover_text("Preview the video inside a TikTok or Reels feed, with the app's own buttons and text (G)")
+                .clicked()
+            {
+                self.reel_guide = !self.reel_guide;
+            }
+        });
+    }
+
+    /// Time, previous clip, play, next clip and total time, centred under the
+    /// preview, with the timeline zoom at the right.
+    fn transport(&mut self, ui: &mut Ui, area: egui::Rect) {
+        use super::glyph::Glyph;
+        let p = pal(ui);
+        let c = area.center();
+        // What the last action did, at the left, cut off before the time.
+        if let Some(s) = &self.status {
+            let room = egui::Rect::from_min_max(egui::pos2(area.left() + 16.0, area.top()), egui::pos2(c.x - 190.0, area.bottom()));
+            let text = ui.painter().with_clip_rect(room).text(room.left_center(), egui::Align2::LEFT_CENTER, s, egui::FontId::proportional(theme::SECONDARY), p.secondary);
+            if text.width() > room.width() {
+                ui.interact(room, ui.id().with("status"), Sense::hover()).on_hover_text(s);
+            }
+        }
+        let time = |ui: &Ui, x: f32, align: egui::Align2, ms: f64| {
+            ui.painter().text(egui::pos2(x, c.y), align, fmt_time(ms), egui::FontId::monospace(theme::BODY), p.tertiary);
+        };
+        time(ui, c.x - 120.0, egui::Align2::RIGHT_CENTER, self.playhead);
+        time(ui, c.x + 120.0, egui::Align2::LEFT_CENTER, self.duration());
+        let side = |dx: f32| egui::Rect::from_center_size(egui::pos2(c.x + dx, c.y), vec2(34.0, 34.0));
+        for (dx, glyph, forward, tip) in [(-62.0, Glyph::Prev, false, "Previous clip"), (62.0, Glyph::Next, true, "Next clip")] {
+            let r = side(dx);
+            let resp = ui.interact(r, ui.id().with(("transport", dx.to_bits())), Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(r, CornerRadius::same(17), p.hover);
+            }
+            super::glyph::paint(ui.painter(), r.center(), 16.0, glyph, p.text);
+            if resp.on_hover_text(tip).clicked() {
+                self.seek_clip(forward);
+            }
+        }
+        let play = egui::Rect::from_center_size(c, vec2(40.0, 40.0));
+        let resp = ui.interact(play, ui.id().with("transport-play"), Sense::click());
+        ui.painter().circle_stroke(c, if resp.hovered() { 19.0 } else { 18.0 }, Stroke::new(1.5, p.text));
+        let g = if self.is_playing() { Glyph::Pause } else { Glyph::Play };
+        super::glyph::paint(ui.painter(), c + vec2(if g == Glyph::Play { 1.0 } else { 0.0 }, 0.0), 16.0, g, p.text);
+        if resp.on_hover_text("Play/Pause (Space)").clicked() {
+            self.toggle_play();
+        }
+        // Timeline zoom.
+        let zoom = egui::Rect::from_min_size(egui::pos2(area.right() - 150.0, c.y - 9.0), vec2(120.0, 18.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(zoom), |ui| {
+            let mut zoom = self.px_per_sec as f64;
+            widgets::track_w(ui, 120.0, &mut zoom, 20.0..=400.0, true, None).on_hover_text("Timeline zoom");
+            self.px_per_sec = zoom as f32;
+        });
+    }
+
+    /// The edit tools as a floating column of icons at the left.
+    fn tool_rail(&mut self, ui: &mut Ui) {
+        use super::glyph::Glyph;
+        let p = pal(ui);
+        let has_camera = self.rec.meta.camera.is_some();
+        let n = if has_camera { 6.0 } else { 5.0 };
+        let area = ui.available_rect_before_wrap();
+        let height = n * 34.0 + (n - 1.0) * 2.0 + 16.0;
+        let pill = egui::Rect::from_center_size(egui::pos2(area.center().x, area.center().y), vec2(46.0, height));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(pill), |ui| {
+            egui::Frame::new().fill(p.inspector).corner_radius(CornerRadius::same(18)).inner_margin(egui::Margin::symmetric(5, 8)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.vertical(|ui| {
+                    if widgets::glyph_button(ui, Glyph::Scissors, 18.0, false, true)
+                        .on_hover_text("Split at playhead (S or ⌘B). Q trims everything before the playhead, W everything after.")
+                        .clicked()
+                    {
+                        self.split();
+                    }
+                    if widgets::glyph_button(ui, Glyph::ZoomPlus, 18.0, false, true).on_hover_text("Add zoom at playhead (Z)").clicked() {
+                        self.add_zoom();
+                    }
+                    if widgets::glyph_button(ui, Glyph::Mask, 18.0, false, true).on_hover_text("Blur, pixelate or highlight a region (M)").clicked() {
+                        self.add_mask();
+                    }
+                    if has_camera && widgets::glyph_button(ui, Glyph::Camera, 18.0, false, true).on_hover_text("Add a camera layout at the playhead").clicked() {
+                        let src = self.source_at_playhead();
+                        let dur_src = self.rec.meta.duration_ms;
+                        self.edit(|p| {
+                            let id = p.timeline.new_id();
+                            p.timeline.layouts.push(crate::project::model::LayoutRange {
+                                id,
+                                start: src,
+                                end: (src + 3000.0).min(dur_src).max(src),
+                                kind: crate::project::model::LayoutKind::CameraOnly,
+                                ..Default::default()
+                            });
+                        });
+                    }
+                    if widgets::glyph_button(ui, Glyph::Loop, 18.0, self.looping, true).on_hover_text("Loop playback (L)").clicked() {
+                        self.looping = !self.looping;
+                    }
+                    if widgets::glyph_button(ui, Glyph::Trash, 18.0, false, self.selection != Selection::None)
+                        .on_hover_text("Delete the selected item (Delete)")
+                        .clicked()
+                    {
+                        self.delete_selection();
+                    }
+                });
             });
         });
     }
