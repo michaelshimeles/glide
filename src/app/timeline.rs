@@ -34,7 +34,9 @@ pub fn extra_height(ed: &Editor) -> f32 {
 
 #[derive(Clone, Copy)]
 enum Drag {
-    SliceEdge { id: u64, left: bool },
+    /// `orig` is the edge's source time and `grab_x` the pointer's x when the
+    /// drag started.
+    SliceEdge { id: u64, left: bool, orig: f64, grab_x: f32 },
     Zoom { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
     Layout { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
     Mask { id: u64, part: Part, grab_src: f64, orig: (f64, f64) },
@@ -66,6 +68,16 @@ fn mask_color() -> Color32 {
 /// panic).
 fn clamp_or(v: f64, lo: f64, hi: f64, keep: f64) -> f64 {
     if lo <= hi { v.clamp(lo, hi) } else { keep }
+}
+
+/// Source time of a clip edge grabbed at `orig` once the pointer has moved
+/// `dx_px` since. It depends only on the grab and the pointer, never on where
+/// the edge is now: trimming ripples the timeline, so the edge's own position
+/// on screen doesn't follow the pointer, and measuring from it would add the
+/// same distance again every frame.
+fn edge_after_drag(orig: f64, dx_px: f32, px_per_ms: f64, speed: f64) -> f64 {
+    let speed = if speed > 0.0 { speed } else { 1.0 };
+    orig + dx_px as f64 / px_per_ms * speed
 }
 
 /// Greedy lane assignment so overlapping ranges don't cover each other.
@@ -190,8 +202,13 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
                 if near_l || near_r {
                     hover_cursor = Some(egui::CursorIcon::ResizeHorizontal);
                 }
-                if bg.drag_started() && drag.is_none() && (near_l || near_r) {
-                    drag = Some(Drag::SliceEdge { id, left: near_l });
+                if bg.drag_started()
+                    && drag.is_none()
+                    && (near_l || near_r)
+                    && let Some(s) = slice
+                {
+                    let grab_x = ui.input(|i| i.pointer.press_origin()).map_or(pos.x, |p| p.x);
+                    drag = Some(Drag::SliceEdge { id, left: near_l, orig: if near_l { s.start } else { s.end }, grab_x });
                 } else if bg.clicked() {
                     ed.selection = Selection::Slice(id);
                 }
@@ -429,21 +446,17 @@ pub fn ui(ui: &mut Ui, ed: &mut Editor) {
             let dur_src = ed.rec.meta.duration_ms;
             match d {
                 Drag::Playhead => ed.seek(pb_of(pos.x)),
-                Drag::SliceEdge { id, left } => {
-                    let raw = map.to_source(pb_of(pos.x).clamp(0.0, map.duration()));
+                Drag::SliceEdge { id, left, orig, grab_x } => {
                     let mut draft = ed.project.clone();
                     let slices = &mut draft.timeline.slices;
                     if let Some(i) = slices.iter().position(|s| s.id == id) {
                         let lo = if i > 0 { slices[i - 1].end } else { 0.0 };
                         let hi = if i + 1 < slices.len() { slices[i + 1].start } else { dur_src };
                         let s = &mut slices[i];
+                        let target = edge_after_drag(orig, pos.x - grab_x, px_per_ms as f64, s.speed);
                         if left {
-                            // Dragging a left edge past its current source start
-                            // extends into the cut region before it.
-                            let target = if pos.x < x_of(map.to_playback_nearest(s.start)) - 1.0 { s.start - (x_of(map.to_playback_nearest(s.start)) - pos.x) as f64 / px_per_ms as f64 * s.speed } else { raw };
                             s.start = clamp_or(target, lo, s.end - 200.0, s.start);
                         } else {
-                            let target = if pos.x > x_of(map.to_playback_nearest(s.end)) + 1.0 { s.end + (pos.x - x_of(map.to_playback_nearest(s.end))) as f64 / px_per_ms as f64 * s.speed } else { raw };
                             s.end = clamp_or(target, s.start + 200.0, hi, s.end);
                         }
                     }
@@ -540,6 +553,22 @@ mod tests {
     fn clamp_or_never_panics() {
         assert_eq!(super::clamp_or(5.0, 0.0, 3.0, 9.0), 3.0);
         assert_eq!(super::clamp_or(5.0, 4.0, 3.0, 9.0), 9.0);
+    }
+
+    #[test]
+    fn an_edge_drag_depends_only_on_the_grab_and_the_pointer() {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        // 40 px at 0.1 px/ms is 400 ms, however many times it is evaluated.
+        let once = super::edge_after_drag(2000.0, 40.0, 0.1, 1.0);
+        assert!(near(once, 2400.0));
+        assert!(near(super::edge_after_drag(2000.0, 40.0, 0.1, 1.0), once));
+        // Left of the grab moves the edge earlier.
+        assert!(near(super::edge_after_drag(2000.0, -10.0, 0.1, 1.0), 1900.0));
+        // A clip at 2x covers twice the source time per pixel.
+        assert!(near(super::edge_after_drag(2000.0, 10.0, 0.1, 2.0), 2200.0));
+        // No movement leaves the edge where it was grabbed; a bad speed counts as 1x.
+        assert!(near(super::edge_after_drag(2000.0, 0.0, 0.1, 1.0), 2000.0));
+        assert!(near(super::edge_after_drag(2000.0, 10.0, 0.1, 0.0), 2100.0));
     }
 
     #[test]
