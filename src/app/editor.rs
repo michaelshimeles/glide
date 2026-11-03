@@ -149,6 +149,9 @@ pub struct Editor {
     pub peaks: Arc<Mutex<Option<TrackPeaks>>>,
     /// The "no sound" note has been shown.
     silence_noted: bool,
+    /// Where exports are saved (the app setting, copied in each frame); None
+    /// means next to the recording.
+    pub export_dir: Option<PathBuf>,
 }
 
 /// Why a recording has no sound.
@@ -212,6 +215,7 @@ impl Editor {
             mask_watch,
             peaks,
             silence_noted: false,
+            export_dir: None,
         })
     }
 
@@ -562,7 +566,13 @@ impl Editor {
 
     pub fn start_export(&mut self) {
         let settings = self.project.export;
-        let output = export::default_output(&self.package.root, &settings);
+        let output = export::output_path(self.export_dir.as_deref(), &self.package.root, &settings);
+        if let Some(dir) = output.parent()
+            && let Err(e) = std::fs::create_dir_all(dir)
+        {
+            self.export.result = Some(Err(format!("Couldn't use {} for the export: {e}", dir.display())));
+            return;
+        }
         let job = Job {
             project: self.project.clone(),
             recording: self.rec.clone(),
@@ -809,6 +819,7 @@ impl Editor {
         let ctx = ui.ctx().clone();
         self.handle_keys(&ctx);
         let p = pal(ui);
+        self.export_dir = chrome.settings.export_dir.clone();
 
         // Toolbar.
         egui::Panel::top("editor-toolbar")
@@ -929,6 +940,11 @@ impl Editor {
 
         if self.export.open {
             self.export_sheet(&ctx);
+        }
+        // A folder chosen in the export sheet is remembered for every project.
+        if self.export_dir != chrome.settings.export_dir {
+            chrome.settings.export_dir = self.export_dir.clone();
+            chrome.settings.save();
         }
     }
 
@@ -1064,6 +1080,27 @@ impl Editor {
                     } else {
                         widgets::toggle_row(ui, "Loop", &mut s.gif_loop);
                     }
+                    widgets::row(ui, "Save to", |ui| {
+                        // Right to left: the buttons first, then the folder's name.
+                        if self.export_dir.is_some() && ui.button("Reset").on_hover_text("Save next to the recording again").clicked() {
+                            self.export_dir = None;
+                        }
+                        if ui.button("Choose…").clicked() {
+                            let start = self.export_dir.clone().or_else(|| self.package.root.parent().map(Path::to_path_buf));
+                            let mut dialog = rfd::FileDialog::new().set_title("Save exports in");
+                            if let Some(start) = start {
+                                dialog = dialog.set_directory(start);
+                            }
+                            if let Some(dir) = dialog.pick_folder() {
+                                self.export_dir = Some(dir);
+                            }
+                        }
+                        let (label, full) = match &self.export_dir {
+                            Some(dir) => (dir.file_name().map_or_else(|| dir.display().to_string(), |n| n.to_string_lossy().into_owned()), dir.display().to_string()),
+                            None => ("Next to the recording".to_string(), "Next to the recording".to_string()),
+                        };
+                        ui.label(RichText::new(label).color(pal(ui).secondary)).on_hover_text(full);
+                    });
                     let (rw, rh) = self.preview.scene.sizes.render_size(s.height);
                     let (w, h) = crate::export::output_size(&self.preview.scene.sizes, &s);
                     let secs = self.duration() / 1000.0;
